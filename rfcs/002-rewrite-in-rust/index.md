@@ -55,8 +55,8 @@ Implement the Lix Engine in Rust.
 ┌─────────────────────────────────────────────────────────────┐
 │                 SQL Database (SQLite)                       │
 │  - Physical storage                                         │
-│  - Transaction management
-|  - Index/query execution                                │
+│  - Transaction management                                   │
+│  - Index/query execution                                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
