@@ -3,20 +3,95 @@ import { createQuerySync } from "../../plugin/query-sync.js";
 import type { LixEngine } from "../boot.js";
 import {
 	planRustExecute,
+	toExecutePreprocessMode,
 	type RustCallbackAdapterDependencies,
 } from "./callback-adapter.js";
+import type {
+	RustDetectChangesRequest,
+	RustDetectChangesResponse,
+	RustExecuteRequest,
+	RustExecuteResponse,
+} from "./callback-contract.js";
 
 type DetectChangesArgs = Parameters<NonNullable<LixPlugin["detectChanges"]>>[0];
 
 export type RustHostBridge = RustCallbackAdapterDependencies;
 
+export type RustExecuteWithHostRequest = {
+	requestId: string;
+	sql: string;
+	params: readonly unknown[];
+	pluginChangeRequests: readonly {
+		pluginKey: string;
+		before: Uint8Array;
+		after: Uint8Array;
+	}[];
+};
+
+export type RustExecuteWithHostResult = {
+	statementKind: RustExecuteRequest["statementKind"];
+	rows: readonly Record<string, unknown>[];
+	rowsAffected: number;
+	lastInsertRowId?: number;
+	pluginChanges: readonly Record<string, unknown>[];
+};
+
+export type RustExecuteWithHost = (args: {
+	request: RustExecuteWithHostRequest;
+	host: {
+		execute: (request: RustExecuteRequest) => RustExecuteResponse;
+		detectChanges: (
+			request: RustDetectChangesRequest
+		) => RustDetectChangesResponse;
+	};
+}) => RustExecuteWithHostResult;
+
 export function createRustHostBridge(args: {
 	engine: Pick<LixEngine, "executeSync" | "getAllPluginsSync">;
+	executeWithHost?: RustExecuteWithHost;
 }): RustHostBridge {
 	const engine = args.engine;
+	const hostExecute = (request: RustExecuteRequest) => {
+		const result = engine.executeSync({
+			sql: request.sql,
+			parameters: request.params,
+			preprocessMode: toExecutePreprocessMode(request.statementKind),
+		});
+
+		return {
+			rows: result.rows,
+			rowsAffected: result.rowsAffected,
+			lastInsertRowId: result.lastInsertRowId,
+		};
+	};
 
 	return {
-			execute: (request) => {
+		execute: (request) => {
+			if (args.executeWithHost) {
+				const result = args.executeWithHost({
+					request: {
+						requestId: request.requestId,
+						sql: request.sql,
+						params: request.params,
+						pluginChangeRequests: [],
+					},
+					host: {
+						execute: hostExecute,
+						detectChanges: (detectRequest) =>
+							executeDetectChanges({
+								engine,
+								request: detectRequest,
+							}),
+					},
+				});
+
+				return {
+					rows: result.rows,
+					rowsAffected: result.rowsAffected,
+					lastInsertRowId: result.lastInsertRowId,
+				};
+			}
+
 				const plan = planRustExecute(request.sql);
 				const result = engine.executeSync({
 					sql: request.sql,
@@ -33,30 +108,37 @@ export function createRustHostBridge(args: {
 					rowsAffected,
 					lastInsertRowId: result.lastInsertRowId,
 				};
-			},
+		},
 		detectChanges: (request) => {
-			const plugin = findPlugin({
-				plugins: engine.getAllPluginsSync(),
-				pluginKey: request.pluginKey,
-			});
-
-			if (!plugin.detectChanges) {
-				throw new Error(
-					`detect changes callback is unavailable for plugin ${request.pluginKey}`
-				);
-			}
-
-			const querySync = createQuerySync({ engine: args.engine });
-			const after = createSyntheticAfterFile(request) as DetectChangesArgs["after"];
-			const before =
-				request.before.length === 0
-					? undefined
-					: (createSyntheticBeforeFile(request) as DetectChangesArgs["before"]);
-
-			const changes = plugin.detectChanges({ before, after, querySync });
-			return { changes: changes as Record<string, unknown>[] };
+			return executeDetectChanges({ engine, request });
 		},
 	};
+}
+
+function executeDetectChanges(args: {
+	engine: Pick<LixEngine, "getAllPluginsSync" | "executeSync">;
+	request: RustDetectChangesRequest;
+}) {
+	const plugin = findPlugin({
+		plugins: args.engine.getAllPluginsSync(),
+		pluginKey: args.request.pluginKey,
+	});
+
+	if (!plugin.detectChanges) {
+		throw new Error(
+			`detect changes callback is unavailable for plugin ${args.request.pluginKey}`
+		);
+	}
+
+	const querySync = createQuerySync({ engine: args.engine });
+	const after = createSyntheticAfterFile(args.request) as DetectChangesArgs["after"];
+	const before =
+		args.request.before.length === 0
+			? undefined
+			: (createSyntheticBeforeFile(args.request) as DetectChangesArgs["before"]);
+
+	const changes = plugin.detectChanges({ before, after, querySync });
+	return { changes: changes as Record<string, unknown>[] };
 }
 
 function findPlugin(args: { plugins: LixPlugin[]; pluginKey: string }): LixPlugin {

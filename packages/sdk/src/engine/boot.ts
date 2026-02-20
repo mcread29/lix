@@ -22,7 +22,10 @@ import {
 	configureRustStatementKindRouter,
 	registerRustCallbackAdapterFunctions,
 } from "./rust-rewrite/callback-adapter.js";
-import { createRustHostBridge } from "./rust-rewrite/host-bridge.js";
+import {
+	createRustHostBridge,
+	type RustExecuteWithHost,
+} from "./rust-rewrite/host-bridge.js";
 
 export type EngineEvent = {
 	type: "state_commit";
@@ -282,8 +285,11 @@ export async function boot(env: BootEnv): Promise<LixEngine> {
 	registerBuiltinFunctions({ register: fnRegistry.register, engine });
 
 	if (env.args.rustRewrite?.mode === "rust_active") {
-		await configureRustNativeExecutionPlanner();
-		const rustHostBridge = createRustHostBridge({ engine });
+		const rustExecuteWithHost = await configureRustNativeExecutionPlanner();
+		const rustHostBridge = createRustHostBridge({
+			engine,
+			executeWithHost: rustExecuteWithHost,
+		});
 		registerRustCallbackAdapterFunctions({
 			register: fnRegistry.register,
 			deps: rustHostBridge,
@@ -297,13 +303,29 @@ export async function boot(env: BootEnv): Promise<LixEngine> {
 	return engine;
 }
 
-async function configureRustNativeExecutionPlanner(): Promise<void> {
+async function configureRustNativeExecutionPlanner(): Promise<
+	RustExecuteWithHost | undefined
+> {
 	try {
 		const module = await import("@lix-js/sdk-rust-engine-node");
 		configureRustExecutePlanner((sql) => module.planExecuteInRust(sql));
 		configureRustStatementKindRouter((sql) => module.routeStatementKindInRust(sql));
+		return ({ request, host }) =>
+			module.executeWithHostInRust({
+				request: {
+					requestId: request.requestId,
+					sql: request.sql,
+					params: request.params,
+					pluginChangeRequests: request.pluginChangeRequests,
+				},
+				host: {
+					execute: (executeRequest) => host.execute(executeRequest),
+					detectChanges: (detectRequest) => host.detectChanges(detectRequest),
+				},
+			});
 	} catch {
 		configureRustExecutePlanner(undefined);
 		configureRustStatementKindRouter(undefined);
+		return undefined;
 	}
 }

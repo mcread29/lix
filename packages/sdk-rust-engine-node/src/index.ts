@@ -20,6 +20,60 @@ export type RustEngineExecutePlan = {
 	rowsAffectedMode: RustEngineRowsAffectedMode;
 };
 
+export type RustEnginePluginChangeRequest = {
+	pluginKey: string;
+	before: Uint8Array;
+	after: Uint8Array;
+};
+
+export type RustEngineExecuteWithHostRequest = {
+	requestId: string;
+	sql: string;
+	params: readonly unknown[];
+	pluginChangeRequests: readonly RustEnginePluginChangeRequest[];
+};
+
+export type RustEngineHostExecuteRequest = {
+	requestId: string;
+	sql: string;
+	params: readonly unknown[];
+	statementKind: RustEngineStatementKind;
+};
+
+export type RustEngineHostExecuteResponse = {
+	rows: readonly Record<string, unknown>[];
+	rowsAffected: number;
+	lastInsertRowId?: number;
+};
+
+export type RustEngineHostDetectChangesRequest = {
+	requestId: string;
+	pluginKey: string;
+	before: Uint8Array;
+	after: Uint8Array;
+};
+
+export type RustEngineHostDetectChangesResponse = {
+	changes: readonly Record<string, unknown>[];
+};
+
+export type RustEngineHostCallbacks = {
+	execute: (
+		request: RustEngineHostExecuteRequest
+	) => RustEngineHostExecuteResponse;
+	detectChanges: (
+		request: RustEngineHostDetectChangesRequest
+	) => RustEngineHostDetectChangesResponse;
+};
+
+export type RustEngineExecuteWithHostResult = {
+	statementKind: RustEngineStatementKind;
+	rows: readonly Record<string, unknown>[];
+	rowsAffected: number;
+	lastInsertRowId?: number;
+	pluginChanges: readonly Record<string, unknown>[];
+};
+
 export type RustEngineBindingLoadResult = {
 	target: RustEngineBindingTarget;
 	executablePath: string;
@@ -104,6 +158,47 @@ export function planExecuteInRust(sql: string): RustEngineExecutePlan {
 	}
 
 	return parsed;
+}
+
+export function executeWithHostInRust(args: {
+	request: RustEngineExecuteWithHostRequest;
+	host: RustEngineHostCallbacks;
+}): RustEngineExecuteWithHostResult {
+	const plan = planExecuteInRust(args.request.sql);
+	const executeResponse = args.host.execute({
+		requestId: args.request.requestId,
+		sql: args.request.sql,
+		params: args.request.params,
+		statementKind: plan.statementKind,
+	});
+
+	const pluginChanges: Record<string, unknown>[] = [];
+	const shouldDispatchDetectChanges =
+		plan.statementKind === "write_rewrite" || plan.statementKind === "validation";
+	if (shouldDispatchDetectChanges) {
+		for (const pluginRequest of args.request.pluginChangeRequests) {
+			const detectResponse = args.host.detectChanges({
+				requestId: args.request.requestId,
+				pluginKey: pluginRequest.pluginKey,
+				before: pluginRequest.before,
+				after: pluginRequest.after,
+			});
+			pluginChanges.push(
+				...(detectResponse.changes as ReadonlyArray<Record<string, unknown>>)
+			);
+		}
+	}
+
+	return {
+		statementKind: plan.statementKind,
+		rows: executeResponse.rows,
+		rowsAffected:
+			plan.rowsAffectedMode === "rows_length"
+				? executeResponse.rows.length
+				: executeResponse.rowsAffected,
+		lastInsertRowId: executeResponse.lastInsertRowId,
+		pluginChanges,
+	};
 }
 
 function isExecutePlan(value: unknown): value is RustEngineExecutePlan {

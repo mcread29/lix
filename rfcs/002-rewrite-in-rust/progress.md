@@ -16,6 +16,27 @@ Current state is **partially complete toward full Rust ownership**:
 
 ## Progress
 
+### 2026-02-20 SDK Runtime Wiring Update
+
+Status: **Entry-point wired in SDK rust mode**
+
+- SDK rust-active runtime now injects Rust runtime execution through `executeWithHostInRust` (TS binding for Rust `execute_with_host`) instead of relying only on planner-mode execution in the host bridge.
+- Host callback contracts remain unchanged:
+  - execute callback request/response shapes are preserved.
+  - detectChanges callback request/response shapes are preserved.
+- SDK SQLite ownership/lifecycle is unchanged; rust-mode still executes through SDK-owned `engine.executeSync`.
+- Non-rust execution behavior remains unchanged (legacy mode path is untouched).
+- Host bridge keeps planner fallback behavior when rust runtime module loading is unavailable.
+- Added coverage for entrypoint dispatch and callback compatibility:
+  - `packages/sdk-rust-engine-node/src/index.test.ts` now verifies read/write/validation/passthrough `executeWithHostInRust` dispatch and detect-changes orchestration.
+  - `packages/sdk/src/engine/rust-rewrite/host-bridge.test.ts` now verifies execute_with_host callback compatibility and dispatch integration in SDK host bridge.
+- Verified with:
+  - `pnpm --filter @lix-js/sdk-rust-engine-node test`
+  - `pnpm --filter @lix-js/sdk-rust-engine-node build`
+  - `cd packages/sdk && node ./scripts/build.js --setup-only && pnpm exec vitest run src/engine/rust-rewrite/host-bridge.test.ts src/engine/boot.test.ts`
+  - `pnpm --filter @lix-js/sdk typecheck`
+  - `pnpm --filter @lix-js/sdk-rust-engine-node lint`
+
 ### 1. SQL Parsing - `sqlparser-rs`
 
 Status: **In progress (core complete, rewrite parity pending)**
@@ -74,8 +95,8 @@ Status: **Implemented with passing tests for core paths**
 ## Moving Forward
 
 1. **Wire Rust execution entrypoint into SDK runtime path**
-   - Replace planner-only invocation with `execute_with_host` invocation path from SDK rust mode.
-   - Keep SDK-owned SQLite lifecycle and callback contracts unchanged.
+   - Completed for rust-active mode: planner-only invocation path is now replaced with `execute_with_host`-style runtime entrypoint wiring (`executeWithHostInRust`) with fallback retention.
+   - SDK-owned SQLite lifecycle and callback contracts remain unchanged.
 
 2. **Port read rewrite parity from SDK preprocessor to Rust**
    - Implement AST-level SELECT rewrite behavior equivalent to current SDK rewrite pipeline.
