@@ -391,3 +391,9 @@ packages/lix-docs/docs/.vitepress/cache
 packages/lix-docs/docs/.vitepress/dist
 
 artifact/*
+
+# Local OpenCode tooling artifacts
+.opencode/custom-tools.mdx
+
+# Rust build artifacts
+packages/sdk-rust-engine-node/native/lix-engine/target/
