@@ -32,6 +32,33 @@ async function createEngine(mode: RolloutMode) {
 }
 
 describe("rust rewrite parity", () => {
+	test("virtual table and view read parity fixtures between legacy and rust_active", async () => {
+		const legacy = await createEngine("legacy");
+		const active = await createEngine("rust_active");
+
+		const fixtures = [
+			"select count(*) as row_count from lix_internal_state_vtable where schema_key = 'lix_active_version' and version_id = 'global'",
+			"select count(*) as row_count from state_by_version where schema_key = 'lix_active_version' and version_id = 'global'",
+			"select count(*) as row_count from state where schema_key = 'lix_active_version'",
+		] as const;
+
+		for (const sql of fixtures) {
+			const legacyResult = legacy.engine.executeSync({ sql, parameters: [] });
+			const activeResponse = await active.engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+				requestId: `parity-fixture-${sql.length}`,
+				sql,
+				paramsJson: "[]",
+				statementKind: "passthrough",
+			});
+			const activeResult = deserializeExecuteResponse(activeResponse as any);
+			expect(activeResult.rows).toEqual(legacyResult.rows);
+			expect(activeResult.rowsAffected).toBe(activeResult.rows.length);
+		}
+
+		legacy.sqlite.close();
+		active.sqlite.close();
+	});
+
 	test("read query parity between legacy and rust_active", async () => {
 		const legacy = await createEngine("legacy");
 		const active = await createEngine("rust_active");

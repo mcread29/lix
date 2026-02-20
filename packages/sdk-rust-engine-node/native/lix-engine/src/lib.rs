@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlparser::ast::Statement;
+use sqlparser::ast::{Ident, ObjectName, Query, Select, SetExpr, Statement, TableAlias, TableFactor, TableWithJoins};
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 
@@ -19,6 +19,7 @@ pub const LIX_RUST_UNSUPPORTED_SQLITE_FEATURE: &str = "LIX_RUST_UNSUPPORTED_SQLI
 pub const LIX_RUST_PROTOCOL_MISMATCH: &str = "LIX_RUST_PROTOCOL_MISMATCH";
 pub const LIX_RUST_TIMEOUT: &str = "LIX_RUST_TIMEOUT";
 pub const LIX_RUST_UNKNOWN: &str = "LIX_RUST_UNKNOWN";
+const INTERNAL_STATE_VTABLE: &str = "lix_internal_state_vtable";
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -260,7 +261,7 @@ fn rewrite_sql_for_execution(
     }
 
     let dialect = SQLiteDialect {};
-    let parsed = Parser::parse_sql(&dialect, sql).map_err(|error| {
+    let mut parsed = Parser::parse_sql(&dialect, sql).map_err(|error| {
         EngineError::protocol_mismatch(format!("failed to parse SQL for rewrite: {error}"))
     })?;
 
@@ -270,7 +271,162 @@ fn rewrite_sql_for_execution(
         ));
     }
 
-    Ok(sql.to_owned())
+    if statement_kind != RUST_KIND_READ_REWRITE {
+        return Ok(sql.to_owned());
+    }
+
+    let mut changed = false;
+    for statement in &mut parsed {
+        changed |= rewrite_statement_for_read_rewrite(statement)?;
+    }
+
+    if !changed {
+        return Ok(sql.to_owned());
+    }
+
+    Ok(parsed
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>()
+        .join("; "))
+}
+
+fn rewrite_statement_for_read_rewrite(statement: &mut Statement) -> Result<bool, EngineError> {
+    match statement {
+        Statement::Query(query) => rewrite_query_for_read_rewrite(query),
+        _ => Ok(false),
+    }
+}
+
+fn rewrite_query_for_read_rewrite(query: &mut Query) -> Result<bool, EngineError> {
+    let mut changed = false;
+
+    if let Some(with_clause) = &mut query.with {
+        for cte in &mut with_clause.cte_tables {
+            changed |= rewrite_query_for_read_rewrite(&mut cte.query)?;
+        }
+    }
+
+    changed |= rewrite_set_expr_for_read_rewrite(&mut query.body)?;
+    Ok(changed)
+}
+
+fn rewrite_set_expr_for_read_rewrite(set_expr: &mut SetExpr) -> Result<bool, EngineError> {
+    match set_expr {
+        SetExpr::Select(select) => rewrite_select_for_read_rewrite(select),
+        SetExpr::Query(query) => rewrite_query_for_read_rewrite(query),
+        SetExpr::SetOperation { left, right, .. } => {
+            let left_changed = rewrite_set_expr_for_read_rewrite(left)?;
+            let right_changed = rewrite_set_expr_for_read_rewrite(right)?;
+            Ok(left_changed || right_changed)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn rewrite_select_for_read_rewrite(select: &mut Select) -> Result<bool, EngineError> {
+    let mut changed = false;
+    for table_with_joins in &mut select.from {
+        changed |= rewrite_table_with_joins_for_read_rewrite(table_with_joins)?;
+    }
+    Ok(changed)
+}
+
+fn rewrite_table_with_joins_for_read_rewrite(
+    table_with_joins: &mut TableWithJoins,
+) -> Result<bool, EngineError> {
+    let mut changed = rewrite_table_factor_for_read_rewrite(&mut table_with_joins.relation)?;
+
+    for join in &mut table_with_joins.joins {
+        changed |= rewrite_table_factor_for_read_rewrite(&mut join.relation)?;
+    }
+
+    Ok(changed)
+}
+
+fn rewrite_table_factor_for_read_rewrite(
+    table_factor: &mut TableFactor,
+) -> Result<bool, EngineError> {
+    match table_factor {
+        TableFactor::Table {
+            name, alias, args, ..
+        } => {
+            if args.is_some() || !is_target_vtable_name(name) {
+                return Ok(false);
+            }
+
+            let subquery = build_state_vtable_equivalent_subquery()?;
+            let derived_alias = alias.take().unwrap_or_else(|| TableAlias {
+                name: Ident::new(INTERNAL_STATE_VTABLE),
+                columns: Vec::new(),
+            });
+            *table_factor = TableFactor::Derived {
+                lateral: false,
+                subquery: Box::new(subquery),
+                alias: Some(derived_alias),
+            };
+            Ok(true)
+        }
+        TableFactor::Derived { subquery, .. } => rewrite_query_for_read_rewrite(subquery),
+        TableFactor::NestedJoin {
+            table_with_joins, ..
+        } => rewrite_table_with_joins_for_read_rewrite(table_with_joins),
+        TableFactor::Pivot { table, .. } => rewrite_table_factor_for_read_rewrite(table),
+        TableFactor::Unpivot { table, .. } => rewrite_table_factor_for_read_rewrite(table),
+        TableFactor::MatchRecognize { table, .. } => {
+            rewrite_table_factor_for_read_rewrite(table)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn is_target_vtable_name(name: &ObjectName) -> bool {
+    name.0
+        .last()
+        .map(|part| part.value.eq_ignore_ascii_case(INTERNAL_STATE_VTABLE))
+        .unwrap_or(false)
+}
+
+fn build_state_vtable_equivalent_subquery() -> Result<Query, EngineError> {
+    let dialect = SQLiteDialect {};
+    let statements = Parser::parse_sql(
+        &dialect,
+        "SELECT \
+            entity_id, \
+            schema_key, \
+            file_id, \
+            version_id, \
+            plugin_key, \
+            snapshot_content, \
+            schema_version, \
+            created_at, \
+            updated_at, \
+            inherited_from_version_id, \
+            NULL AS change_id, \
+            1 AS untracked, \
+            NULL AS commit_id, \
+            NULL AS writer_key, \
+            NULL AS metadata \
+        FROM lix_internal_state_all_untracked",
+    )
+    .map_err(|error| {
+        EngineError::protocol_mismatch(format!(
+            "failed to construct read rewrite for {INTERNAL_STATE_VTABLE}: {error}"
+        ))
+    })?;
+
+    let statement = statements.into_iter().next().ok_or_else(|| {
+        EngineError::protocol_mismatch(format!(
+            "missing read rewrite statement for {INTERNAL_STATE_VTABLE}"
+        ))
+    })?;
+
+    match statement {
+        Statement::Query(query) => Ok(*query),
+        _ => Err(EngineError::protocol_mismatch(format!(
+            "read rewrite query for {INTERNAL_STATE_VTABLE} must be a SELECT"
+        ))),
+    }
 }
 
 fn validate_validation_mutations(sql: &str) -> Result<(), EngineError> {
@@ -386,9 +542,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        execute_with_host, plan_execute, route_statement_kind, EngineError, ExecuteRequest,
-        HostCallbacks, HostDetectChangesRequest, HostDetectChangesResponse, HostExecuteRequest,
-        HostExecuteResponse, PluginChangeRequest, LIX_RUST_DETECT_CHANGES,
+        execute_with_host, plan_execute, rewrite_sql_for_execution, route_statement_kind,
+        EngineError, ExecuteRequest, HostCallbacks, HostDetectChangesRequest,
+        HostDetectChangesResponse, HostExecuteRequest, HostExecuteResponse, PluginChangeRequest,
+        LIX_RUST_DETECT_CHANGES,
         LIX_RUST_REWRITE_VALIDATION, LIX_RUST_SQLITE_EXECUTION, RUST_KIND_PASSTHROUGH,
         RUST_KIND_READ_REWRITE, RUST_KIND_VALIDATION, RUST_KIND_WRITE_REWRITE,
         RUST_ROWS_AFFECTED_ROWS_LENGTH, RUST_ROWS_AFFECTED_SQLITE_CHANGES,
@@ -488,6 +645,41 @@ mod tests {
             validation_plan.rows_affected_mode,
             RUST_ROWS_AFFECTED_SQLITE_CHANGES
         );
+    }
+
+    #[test]
+    fn rewrites_state_vtable_selects_to_derived_query() {
+        let rewritten = rewrite_sql_for_execution(
+            "select entity_id from lix_internal_state_vtable where schema_key = 'lix_active_version'",
+            RUST_KIND_READ_REWRITE,
+        )
+        .expect("read rewrite should succeed");
+
+        let normalized = rewritten.to_lowercase();
+        assert!(normalized.contains("from (select"));
+        assert!(normalized.contains("from lix_internal_state_all_untracked"));
+        assert!(normalized.contains("as lix_internal_state_vtable"));
+    }
+
+    #[test]
+    fn rewrites_state_vtable_selects_with_alias() {
+        let rewritten = rewrite_sql_for_execution(
+            "select v.entity_id from lix_internal_state_vtable as v",
+            RUST_KIND_READ_REWRITE,
+        )
+        .expect("read rewrite with alias should succeed");
+
+        let normalized = rewritten.to_lowercase();
+        assert!(normalized.contains("as v"));
+        assert!(normalized.contains("from lix_internal_state_all_untracked"));
+    }
+
+    #[test]
+    fn preserves_non_vtable_read_sql() {
+        let sql = "select id, path from file order by id limit 1";
+        let rewritten =
+            rewrite_sql_for_execution(sql, RUST_KIND_READ_REWRITE).expect("rewrite should work");
+        assert_eq!(rewritten, sql);
     }
 
     #[test]

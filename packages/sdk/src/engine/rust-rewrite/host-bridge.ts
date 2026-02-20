@@ -51,11 +51,19 @@ export function createRustHostBridge(args: {
 	executeWithHost?: RustExecuteWithHost;
 }): RustHostBridge {
 	const engine = args.engine;
+	const toRustHostPreprocessMode = (
+		statementKind: RustExecuteRequest["statementKind"]
+	): "full" | "none" => {
+		if (statementKind === "read_rewrite" || statementKind === "passthrough") {
+			return "none";
+		}
+		return toExecutePreprocessMode(statementKind);
+	};
 	const hostExecute = (request: RustExecuteRequest) => {
 		const result = engine.executeSync({
 			sql: request.sql,
 			parameters: request.params,
-			preprocessMode: toExecutePreprocessMode(request.statementKind),
+			preprocessMode: toRustHostPreprocessMode(request.statementKind),
 		});
 
 		return {

@@ -152,7 +152,7 @@ describe("rust host bridge", () => {
 		});
 
 		expect(executeCalls).toEqual([
-			{ statementKind: "read_rewrite", preprocessMode: "full" },
+			{ statementKind: "read_rewrite", preprocessMode: "none" },
 			{ statementKind: "passthrough", preprocessMode: "none" },
 			{ statementKind: "write_rewrite", preprocessMode: "full" },
 			{ statementKind: "validation", preprocessMode: "full" },
