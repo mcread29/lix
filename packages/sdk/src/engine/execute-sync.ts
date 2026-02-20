@@ -22,6 +22,15 @@ export function createExecuteSync(args: {
 
 		const columnNames: string[] = [];
 		try {
+			const beforeMetadataRows = args.engine.sqlite.exec({
+				sql: "select total_changes() as total_changes",
+				returnValue: "resultRows",
+				rowMode: "object",
+			}) as Array<Record<string, unknown>>;
+			const beforeTotalChanges = Number(
+				beforeMetadataRows[0]?.total_changes ?? 0
+			);
+
 			const rows = args.engine.sqlite.exec({
 				sql: preprocessed.sql,
 				bind: preprocessed.parameters as any[],
@@ -29,7 +38,25 @@ export function createExecuteSync(args: {
 				rowMode: "object",
 				columnNames,
 			});
-			return { rows };
+
+			const metadataRows = args.engine.sqlite.exec({
+				sql: "select total_changes() as total_changes, last_insert_rowid() as last_insert_row_id",
+				returnValue: "resultRows",
+				rowMode: "object",
+			}) as Array<Record<string, unknown>>;
+			const metadata = metadataRows[0] ?? {};
+			const afterTotalChanges = Number(metadata.total_changes ?? 0);
+			const rowsAffected = Math.max(0, afterTotalChanges - beforeTotalChanges);
+			const lastInsertRowIdRaw = Number(metadata.last_insert_row_id ?? 0);
+
+			return {
+				rows,
+				rowsAffected,
+				lastInsertRowId:
+					rowsAffected > 0 && Number.isFinite(lastInsertRowIdRaw)
+						? lastInsertRowIdRaw
+						: undefined,
+			};
 		} catch (error) {
 			const enriched =
 				error instanceof Error ? error : new Error(String(error));

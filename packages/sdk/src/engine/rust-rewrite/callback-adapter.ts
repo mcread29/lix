@@ -58,7 +58,7 @@ export type RustCallbackAdapter = {
 
 export type RustRoutedStatementKind = Extract<
 	RustExecuteRequest["statementKind"],
-	"read_rewrite" | "passthrough"
+	"read_rewrite" | "write_rewrite" | "passthrough"
 >;
 
 export function createRustCallbackAdapter(
@@ -133,18 +133,44 @@ export function routeRustExecuteStatementKind(sql: string): RustRoutedStatementK
 		return "passthrough";
 	}
 
+	let sawRead = false;
+	let sawWrite = false;
+
 	for (const statement of statements) {
 		for (const segment of statement.segments) {
 			if (segment.node_kind === "raw_fragment") {
 				return "passthrough";
 			}
+
 			if (
-				segment.node_kind !== "select_statement" &&
-				segment.node_kind !== "compound_select"
+				segment.node_kind === "select_statement" ||
+				segment.node_kind === "compound_select"
 			) {
+				sawRead = true;
+				continue;
+			}
+
+			if (
+				segment.node_kind === "insert_statement" ||
+				segment.node_kind === "update_statement" ||
+				segment.node_kind === "delete_statement"
+			) {
+				sawWrite = true;
+				continue;
+			}
+
+			if (segment.node_kind !== "statement") {
 				return "passthrough";
 			}
 		}
+	}
+
+	if (sawWrite) {
+		return "write_rewrite";
+	}
+
+	if (sawRead) {
+		return "read_rewrite";
 	}
 
 	return "read_rewrite";
@@ -153,7 +179,7 @@ export function routeRustExecuteStatementKind(sql: string): RustRoutedStatementK
 export function toExecutePreprocessMode(
 	statementKind: RustExecuteRequest["statementKind"]
 ): "full" | "none" {
-	if (statementKind === "read_rewrite") {
+	if (statementKind !== "passthrough") {
 		return "full";
 	}
 	return "none";

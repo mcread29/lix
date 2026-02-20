@@ -16,17 +16,24 @@ export function createRustHostBridge(args: {
 	const engine = args.engine;
 
 	return {
-		execute: (request) => {
-			const result = engine.executeSync({
-				sql: request.sql,
-				parameters: request.params,
-				preprocessMode: toExecutePreprocessMode(request.statementKind),
-			});
-			return {
-				rows: result.rows,
-				rowsAffected: result.rows.length,
-			};
-		},
+			execute: (request) => {
+				const result = engine.executeSync({
+					sql: request.sql,
+					parameters: request.params,
+					preprocessMode: toExecutePreprocessMode(request.statementKind),
+				});
+
+				const rowsAffected =
+					request.statementKind === "read_rewrite" ||
+					request.statementKind === "passthrough"
+						? result.rows.length
+						: result.rowsAffected;
+				return {
+					rows: result.rows,
+					rowsAffected,
+					lastInsertRowId: result.lastInsertRowId,
+				};
+			},
 		detectChanges: (request) => {
 			const plugin = findPlugin({
 				plugins: engine.getAllPluginsSync(),

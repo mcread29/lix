@@ -131,4 +131,21 @@ describe("rust callback adapter", () => {
 		});
 		expect(request.statementKind).toBe("passthrough");
 	});
+
+	test("routes write SQL deterministically", () => {
+		const sql = "insert into file (id, path, data, metadata, hidden) values (?, ?, ?, json(?), 0)";
+		expect(routeRustExecuteStatementKind(sql)).toBe("write_rewrite");
+		expect(routeRustExecuteStatementKind(sql)).toBe("write_rewrite");
+		expect(toExecutePreprocessMode(routeRustExecuteStatementKind(sql))).toBe(
+			"full"
+		);
+
+		const request = deserializeExecuteRequest({
+			requestId: "req-6",
+			sql,
+			paramsJson: "[]",
+			statementKind: "read_rewrite",
+		});
+		expect(request.statementKind).toBe("write_rewrite");
+	});
 });

@@ -12,7 +12,7 @@ describe("rust host bridge", () => {
 			engine: {
 				executeSync: (args) => {
 					calls.push({ preprocessMode: args.preprocessMode });
-					return { rows: [] };
+					return { rows: [], rowsAffected: 0 };
 				},
 				getAllPluginsSync: () => [],
 			} as Pick<LixEngine, "executeSync" | "getAllPluginsSync">,
@@ -30,11 +30,37 @@ describe("rust host bridge", () => {
 			params: [],
 			statementKind: "passthrough",
 		});
+		bridge.execute({
+			requestId: "req-3",
+			sql: "insert into file (id, path, data, metadata, hidden) values (?, ?, ?, json(?), 0)",
+			params: [],
+			statementKind: "write_rewrite",
+		});
 
 		expect(calls).toEqual([
 			{ preprocessMode: "full" },
 			{ preprocessMode: "none" },
+			{ preprocessMode: "full" },
 		]);
+	});
+
+	test("uses execute metadata for write rows affected", () => {
+		const bridge = createRustHostBridge({
+			engine: {
+				executeSync: () => ({ rows: [], rowsAffected: 2, lastInsertRowId: 41 }),
+				getAllPluginsSync: () => [],
+			} as Pick<LixEngine, "executeSync" | "getAllPluginsSync">,
+		});
+
+		const response = bridge.execute({
+			requestId: "req-write",
+			sql: "insert into file (id, path, data, metadata, hidden) values (?, ?, ?, json(?), 0)",
+			params: [],
+			statementKind: "write_rewrite",
+		});
+
+		expect(response.rowsAffected).toBe(2);
+		expect(response.lastInsertRowId).toBe(41);
 	});
 
 	test("bridges detectChanges through plugin callback", () => {
@@ -73,7 +99,7 @@ describe("rust host bridge", () => {
 
 		const bridge = createRustHostBridge({
 			engine: {
-				executeSync: () => ({ rows: [] }),
+				executeSync: () => ({ rows: [], rowsAffected: 0 }),
 				getAllPluginsSync: () => [jsonPlugin],
 			} as Pick<LixEngine, "executeSync" | "getAllPluginsSync">,
 		});
@@ -95,7 +121,7 @@ describe("rust host bridge", () => {
 	test("throws deterministic detect changes message when plugin missing", () => {
 		const bridge = createRustHostBridge({
 			engine: {
-				executeSync: () => ({ rows: [] }),
+				executeSync: () => ({ rows: [], rowsAffected: 0 }),
 				getAllPluginsSync: () => [],
 			} as Pick<LixEngine, "executeSync" | "getAllPluginsSync">,
 		});

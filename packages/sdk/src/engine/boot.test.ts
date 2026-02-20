@@ -180,6 +180,45 @@ test("rust_active execute route supports passthrough SQL via callback surface", 
 	sqlite.close();
 });
 
+test("rust_active execute route handles write rewrite SQL", async () => {
+	const sqlite = await createInMemoryDatabase({ readOnly: false });
+	const blob = await newLixFile();
+	const buf = new Uint8Array(await blob.arrayBuffer());
+	importDatabase({ db: sqlite, content: buf });
+
+	const engine = await boot({
+		sqlite,
+		emit: () => {},
+		args: {
+			rustRewrite: { mode: "rust_active" },
+		},
+	});
+
+	const response = await engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+		requestId: "active-3",
+		sql: "insert into file (id, path, data, metadata, hidden) values (?, ?, zeroblob(0), json(?), 0)",
+		paramsJson: JSON.stringify([
+			"f-rust-write",
+			"/write.md",
+			JSON.stringify({}),
+		]),
+		statementKind: "read_rewrite",
+	});
+
+	const decoded = deserializeExecuteResponse(response as any);
+	expect(decoded.rowsAffected).toBeGreaterThan(0);
+
+	const rows = sqlite.exec({
+		sql: "select id, path from file where id = ?",
+		bind: ["f-rust-write"],
+		returnValue: "resultRows",
+		rowMode: "object",
+	}) as Array<Record<string, unknown>>;
+	expect(rows).toEqual([{ id: "f-rust-write", path: "/write.md" }]);
+
+	sqlite.close();
+});
+
 test("rust_active detectChanges route returns deterministic boundary code", async () => {
 	const sqlite = await createInMemoryDatabase({ readOnly: false });
 	const blob = await newLixFile();

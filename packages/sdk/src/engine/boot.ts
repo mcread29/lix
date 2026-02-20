@@ -92,6 +92,8 @@ export type LixEngine = {
 		preprocessMode?: "full" | "vtable-select-only" | "none";
 	}) => {
 		rows: any[];
+		rowsAffected: number;
+		lastInsertRowId?: number;
 	};
 	/** Invoke an engine function (router) */
 	call: Call;
