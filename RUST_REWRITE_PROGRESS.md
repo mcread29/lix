@@ -2,7 +2,7 @@
 
 Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
 
-- Last updated: `2026-02-19T18:18:10Z`
+- Last updated: `2026-02-19T17:59:05Z`
 - Phase: `Phase 0`
 - Overall status: `completed` (Phase 0)
 
@@ -72,6 +72,9 @@ Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
 - `2026-02-19T17:57:08Z` - M0.3 rollout tests passed (`3/3` selected): `pnpm --filter @lix-js/sdk exec vitest run src/lix/open-lix.test.ts -t "rust rewrite rollout|rust_active mode works|rust_shadow can be enabled independently"`.
 - `2026-02-19T17:57:20Z` - M0.3 SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
 - `2026-02-19T17:57:21Z` - M0.3 SDK lint passed: `pnpm --filter @lix-js/sdk lint`.
+- `2026-02-19T17:58:08Z` - Full `pnpm --filter @lix-js/sdk test` blocked by `playwright install --with-deps` requiring sudo in this environment (non-code infra limitation).
+- `2026-02-19T17:58:47Z` - Consolidated Phase 0 verification passed: `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/callback-contract.test.ts src/lix/open-lix.test.ts` (`20/20`).
+- `2026-02-19T17:58:55Z` - Final Phase 0 SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
 
 ## Next Steps
 
