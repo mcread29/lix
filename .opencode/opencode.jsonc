@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-pty", "@tarquinen/opencode-dcp@latest"],
+  "mcp": {
+    "project-brain": {
+      "type": "local",
+      "command": [
+        "node",
+        "/home/mchan/dev/lix-project-mcp/tools/mcp-server/build/index.js",
+      ],
+      "environment": {
+        "BRAIN_REPO_ROOT": "/home/mchan/dev/lix_fork/",
+      },
+    },
+  },
+  "permission": {
+    "canvas_*": "allow",
+  },
+}
