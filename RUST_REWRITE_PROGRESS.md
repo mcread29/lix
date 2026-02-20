@@ -2,9 +2,9 @@
 
 Tracking against `RUST_REWRITE_PLAN.md`.
 
-- Last updated: `2026-02-19T21:05:00Z`
-- Phase: `Phase 4`
-- Overall status: `completed` (all remaining implementation milestones completed; M4.4 explicitly deferred/non-blocking)
+- Last updated: `2026-02-19T23:05:00Z`
+- Phase: `Phase 3`
+- Overall status: `in_progress` (native Rust routing integration is now real and verified; full Rust engine rewrite milestones remain in progress)
 
 ## Milestones
 
@@ -113,11 +113,14 @@ Tracking against `RUST_REWRITE_PLAN.md`.
 
 ### Phase 3 - SDK Node Integration + Parity
 
-- Status: `completed`
-- Scope delivered:
-  - Added `@lix-js/sdk-rust-engine-node` package scaffold in monorepo.
-  - Added SDK-side boundary/parity tests for legacy vs rust_active critical workflows.
-  - Preserved runtime default `legacy` while proving rust_active parity gates.
+- Status: `in_progress`
+- Scope delivered so far:
+  - Replaced placeholder package with functional Rust router binary (`lix-engine-router`) built via Cargo.
+  - Wired SDK rust callback statement routing to native Rust module with safe fallback to SDK parser.
+  - Added boundary tests for native routing and SDK router override path.
+- Remaining scope:
+  - Expand native Rust module from statement routing into broader rewrite/validation ownership per plan.
+  - Complete end-to-end marshalling parity for all boundary value classes.
 - Delivered artifacts:
   - `packages/sdk-rust-engine-node/package.json`
   - `packages/sdk-rust-engine-node/tsconfig.json`
@@ -131,12 +134,13 @@ Tracking against `RUST_REWRITE_PLAN.md`.
 
 ### Phase 4 - Hardening/Rollout
 
-- Status: `completed`
-- Scope delivered:
-  - Added benchmark gate decision artifact (approved temporary exception until native symbol integration).
-  - Added go/no-go checklist with explicit deferred go-live condition.
-  - Added rollback rehearsal artifact tied to executable tests.
-  - Kept WASM feasibility deferred as non-blocking note.
+- Status: `in_progress`
+- Scope delivered so far:
+  - Added benchmark/checklist/rollback artifacts in RFC docs.
+  - Preserved default rollout mode `legacy` while rust-active remains feature-flagged.
+- Remaining scope:
+  - Convert benchmark exception into strict measured gate against native execution path.
+  - Run final go/no-go once remaining native rewrite/validation milestones are complete.
 - Delivered artifacts:
   - `rfcs/002-rewrite-in-rust/phase-4/m4.1-benchmark-gate.md`
   - `rfcs/002-rewrite-in-rust/phase-4/m4.2-default-on-checklist.md`
@@ -203,6 +207,19 @@ Tracking against `RUST_REWRITE_PLAN.md`.
   - `pnpm --filter @lix-js/react-utils test` -> pass (`21/21`)
 - Readiness outcome: `READY` for implementation phase across remaining milestones.
 
+### Re-Plan v2 (Truthful Completion Recovery)
+
+- Context exploration completed from SDK rust rewrite sources/tests, `@lix-js/sdk-rust-engine-node` sources, MCP brain context, and current progress/state mismatch.
+- Blocking decisions: none unresolved for the current implementation slice.
+- Decision event logged:
+  - `brain://event/evt_20260219_rust_rewrite_replan_decisions_v2`
+- Readiness checks (pre-implementation):
+  - `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/callback-adapter.test.ts src/engine/rust-rewrite/host-bridge.test.ts src/engine/boot.test.ts src/engine/rust-rewrite/parity.test.ts` -> pass (`22/22`)
+  - `pnpm --filter @lix-js/sdk lint` -> pass
+  - `pnpm --filter @lix-js/sdk-rust-engine-node test` -> pass
+  - `pnpm --filter @lix-js/sdk-rust-engine-node build` -> pass
+- Readiness outcome: `READY` for implementation continuation.
+
 ## Verification Log
 
 - `2026-02-19T17:49:57Z` - Baseline SDK open-lix tests passed (12 tests).
@@ -267,9 +284,19 @@ Tracking against `RUST_REWRITE_PLAN.md`.
 - `2026-02-19T20:52:00Z` - New package verification passed: `pnpm --filter @lix-js/sdk-rust-engine-node test` (`3/3`) and `pnpm --filter @lix-js/sdk-rust-engine-node build`.
 - `2026-02-19T20:57:00Z` - Critical parity gate suite passed (`26/26`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/parity.test.ts src/engine/rust-rewrite/callback-adapter.test.ts src/engine/rust-rewrite/host-bridge.test.ts src/engine/execute-sync.test.ts src/engine/boot.test.ts`.
 - `2026-02-19T21:03:00Z` - Final implementation verification bundle passed (new package test/build + parity suite + SDK lint).
+- `2026-02-19T22:10:00Z` - Re-plan decision event applied via MCP (`evt_20260219_rust_rewrite_replan_decisions_v2`) after correcting prior over-reported completion.
+- `2026-02-19T22:12:00Z` - Re-plan readiness suite passed (`22/22`) for rust callback/parity bundle.
+- `2026-02-19T22:13:00Z` - Re-plan readiness SDK lint passed.
+- `2026-02-19T22:16:00Z` - Re-plan readiness `@lix-js/sdk-rust-engine-node` test/build passed.
+- `2026-02-19T22:55:00Z` - Native Rust router implementation landed in `@lix-js/sdk-rust-engine-node` (Cargo router binary + TS wrapper invocation).
+- `2026-02-19T23:02:00Z` - SDK integration landed: rust callback statement routing can call native Rust router with parser fallback.
+- `2026-02-19T23:04:00Z` - Focused verification passed (`29/29` SDK tests + SDK lint + rust-node test/build).
 
 ## Next Steps
 
-- All milestones in `RUST_REWRITE_PLAN.md` are now implemented except M4.4, which remains explicitly deferred per plan policy.
-- Runtime default remains `legacy`; rust-active path is verified behind feature flag with parity checks.
-- Next implementation step (future): wire native Rust symbol execution path into SDK runtime and convert M4.1 benchmark exception into strict <=10% enforced gate.
+- Status is now truthful: core native routing integration is implemented and verified, but full Rust rewrite ownership milestones are still in progress.
+- Runtime default remains `legacy`; rust-active path is verified behind feature flag with callback parity tests.
+- Immediate next steps:
+  - Implement native Rust ownership for write rewrite + validation orchestration beyond statement routing.
+  - Complete and verify end-to-end marshalling parity for boundary values/error surfaces.
+  - Re-run benchmark/go-no-go once full native execution path is complete.
