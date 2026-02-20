@@ -416,6 +416,9 @@ importers:
 
   packages/sdk:
     dependencies:
+      '@lix-js/sdk-rust-engine-node':
+        specifier: workspace:*
+        version: link:../sdk-rust-engine-node
       '@lix-js/server-protocol-schema':
         specifier: workspace:*
         version: link:../server-protocol-schema

@@ -7,4 +7,9 @@ edition = "2021"
 name = "lix_engine"
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "lix-engine-router"
+path = "src/main.rs"
+
 [dependencies]
+sqlparser = "0.53.0"

@@ -11,8 +11,8 @@
 		".": "./dist/index.js"
 	},
 	"scripts": {
-		"build": "tsc --build",
-		"test": "tsc --noEmit && vitest run",
+		"build": "cargo build --manifest-path native/lix-engine/Cargo.toml --release && tsc --build",
+		"test": "cargo test --manifest-path native/lix-engine/Cargo.toml && cargo build --manifest-path native/lix-engine/Cargo.toml && tsc --noEmit && vitest run",
 		"test:watch": "vitest",
 		"lint": "tsc --noEmit",
 		"format": "prettier ./src --write"

@@ -309,3 +309,40 @@ test("rust_active detectChanges route bridges plugin callback response", async (
 
 	sqlite.close();
 });
+
+test("rust_active write callbacks preserve schema validation failures", async () => {
+	const sqlite = await createInMemoryDatabase({ readOnly: false });
+	const blob = await newLixFile();
+	const buf = new Uint8Array(await blob.arrayBuffer());
+	importDatabase({ db: sqlite, content: buf });
+
+	const engine = await boot({
+		sqlite,
+		emit: () => {},
+		args: {
+			rustRewrite: { mode: "rust_active" },
+		},
+	});
+
+	try {
+		await engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+			requestId: "schema-1",
+			sql: "insert into state (entity_id, schema_key, file_id, plugin_key, snapshot_content, schema_version, metadata, untracked) values (?, ?, ?, ?, json(?), ?, json(?), 0)",
+			paramsJson: JSON.stringify([
+				"entity-1",
+				"missing_schema",
+				"file-1",
+				"plugin-test",
+				JSON.stringify({ id: "entity-1" }),
+				"1.0",
+				JSON.stringify({}),
+			]),
+			statementKind: "passthrough",
+		});
+		expect.fail("expected schema validation failure");
+	} catch (error) {
+		expect(error).toMatchObject({ code: "LIX_RUST_REWRITE_VALIDATION" });
+	}
+
+	sqlite.close();
+});

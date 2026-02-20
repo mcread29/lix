@@ -144,4 +144,42 @@ describe("createExecuteSync", () => {
 		expect(result.rowsAffected).toBe(2);
 		expect(result.lastInsertRowId).toBe(99);
 	});
+
+	test("normalizes binary bind parameters to Uint8Array", async () => {
+		const exec = vi.fn((args: { sql: string; bind?: unknown[] }) => {
+			if (args.sql.includes("total_changes()") && args.sql.includes("last_insert_rowid()")) {
+				return [{ total_changes: 0, last_insert_row_id: 0 }];
+			}
+			if (args.sql.includes("total_changes()")) {
+				return [{ total_changes: 0 }];
+			}
+			return [];
+		});
+		const sqlite = { exec } as unknown as SqliteWasmDatabase;
+		const preprocess = vi.fn(({ sql, parameters }: PreprocessorResult) => ({
+			sql,
+			parameters,
+		}));
+
+		const executeSync = createExecuteSync({
+			engine: {
+				sqlite,
+				hooks: {} as any,
+				runtimeCacheRef: {} as any,
+				preprocessQuery: preprocess as any,
+			},
+		});
+
+		const bytes = new Uint8Array([1, 2, 3]);
+		executeSync({
+			sql: "insert into file (data) values (?)",
+			parameters: [bytes],
+		});
+
+		expect(exec).toHaveBeenCalledWith(
+			expect.objectContaining({
+				bind: [bytes],
+			})
+		);
+	});
 });

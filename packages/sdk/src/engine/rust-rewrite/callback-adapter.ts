@@ -61,6 +61,18 @@ export type RustRoutedStatementKind = Extract<
 	"read_rewrite" | "write_rewrite" | "passthrough"
 >;
 
+export type RustStatementKindRouter = (
+	sql: string
+) => RustRoutedStatementKind;
+
+let configuredRustStatementKindRouter: RustStatementKindRouter | undefined;
+
+export function configureRustStatementKindRouter(
+	router: RustStatementKindRouter | undefined
+): void {
+	configuredRustStatementKindRouter = router;
+}
+
 export function createRustCallbackAdapter(
 	deps: RustCallbackAdapterDependencies
 ): RustCallbackAdapter {
@@ -122,12 +134,20 @@ export function deserializeExecuteRequest(
 	return {
 		requestId: request.requestId,
 		sql: request.sql,
-		params: parsedParams,
+		params: parsedParams.map((value) => deserializeExecuteParamValue(value)),
 		statementKind: routeRustExecuteStatementKind(request.sql),
 	};
 }
 
 export function routeRustExecuteStatementKind(sql: string): RustRoutedStatementKind {
+	if (configuredRustStatementKindRouter) {
+		try {
+			return configuredRustStatementKindRouter(sql);
+		} catch {
+			// Fall through to SDK parser to preserve behavior when native router is unavailable.
+		}
+	}
+
 	const statements = parse(sql);
 	if (statements.length === 0) {
 		return "passthrough";
@@ -347,4 +367,22 @@ function parseByteArray(input: string, field: string): Uint8Array {
 		return value;
 	});
 	return new Uint8Array(values);
+}
+
+function deserializeExecuteParamValue(value: unknown): unknown {
+	if (!Array.isArray(value)) {
+		return value;
+	}
+
+	if (value.length === 0) {
+		return value;
+	}
+
+	for (const entry of value) {
+		if (typeof entry !== "number" || !Number.isInteger(entry) || entry < 0 || entry > 255) {
+			return value;
+		}
+	}
+
+	return new Uint8Array(value as number[]);
 }

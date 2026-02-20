@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+	configureRustStatementKindRouter,
 	createRustCallbackAdapter,
 	deserializeDetectChangesResponse,
 	deserializeExecuteRequest,
@@ -11,6 +12,14 @@ import {
 } from "./callback-adapter.js";
 
 describe("rust callback adapter", () => {
+	test("uses configured statement router when available", () => {
+		configureRustStatementKindRouter(() => "write_rewrite");
+		expect(routeRustExecuteStatementKind("select 1 as value")).toBe(
+			"write_rewrite"
+		);
+		configureRustStatementKindRouter(undefined);
+	});
+
 	test("serializes and deserializes execute payloads", () => {
 		const adapter = createRustCallbackAdapter({
 			execute: (request) => ({

@@ -136,7 +136,12 @@ function inferRustErrorCode(input: Record<string, unknown>): RustRewriteErrorCod
 	if (lowered.includes("timeout")) {
 		return "LIX_RUST_TIMEOUT";
 	}
-	if (lowered.includes("validation") || lowered.includes("rewrite")) {
+	if (
+		lowered.includes("validation") ||
+		lowered.includes("rewrite") ||
+		lowered.includes("immutable") ||
+		lowered.includes("schema")
+	) {
 		return "LIX_RUST_REWRITE_VALIDATION";
 	}
 

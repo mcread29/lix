@@ -12,13 +12,17 @@ export function createExecuteSync(args: {
 			mode === "none"
 				? {
 						sql: args2.sql,
-						parameters: (args2.parameters as ReadonlyArray<unknown>) ?? [],
-					}
+						parameters: normalizeBindParameters(
+							(args2.parameters as ReadonlyArray<unknown>) ?? []
+						),
+				  }
 				: args.engine.preprocessQuery({
 						sql: args2.sql,
-						parameters: (args2.parameters as ReadonlyArray<unknown>) ?? [],
+						parameters: normalizeBindParameters(
+							(args2.parameters as ReadonlyArray<unknown>) ?? []
+						),
 						mode,
-					});
+				  });
 
 		const columnNames: string[] = [];
 		try {
@@ -71,4 +75,20 @@ export function createExecuteSync(args: {
 	};
 
 	return executeSyncFn;
+}
+
+function normalizeBindParameters(
+	parameters: ReadonlyArray<unknown>
+): ReadonlyArray<unknown> {
+	return parameters.map((parameter) => {
+		if (parameter instanceof Uint8Array) {
+			return parameter;
+		}
+
+		if (parameter instanceof ArrayBuffer) {
+			return new Uint8Array(parameter);
+		}
+
+		return parameter;
+	});
 }

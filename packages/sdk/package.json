@@ -58,6 +58,7 @@
 		"node": ">=22"
 	},
 	"dependencies": {
+		"@lix-js/sdk-rust-engine-node": "workspace:*",
 		"@lix-js/server-protocol-schema": "workspace:*",
 		"@marcbachmann/cel-js": "^2.5.2",
 		"@opral/zettel-ast": "0.1.0",
