@@ -2,9 +2,9 @@
 
 Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
 
-- Last updated: `2026-02-19T18:12:20Z`
+- Last updated: `2026-02-19T18:18:10Z`
 - Phase: `Phase 0`
-- Overall status: `in_progress`
+- Overall status: `completed` (Phase 0)
 
 ## Milestones
 
@@ -33,11 +33,15 @@ Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
 
 ### M0.3 - Feature-Flag Rollout Modes + Verification
 
-- Status: `pending`
+- Status: `completed`
 - Planned artifacts:
   - SDK rollout-mode config/types/docs and tests validating `legacy` and `rust_active` operation with `rust_shadow` optional.
 - Verification target:
   - Tests prove `legacy` and `rust_active` modes are selectable and valid when `rust_shadow` is not enabled.
+- Delivered artifacts:
+  - `packages/sdk/src/lix/open-lix.ts`
+  - `packages/sdk/src/lix/open-lix.test.ts`
+  - `rfcs/002-rewrite-in-rust/phase-0/m0.3-rollout-modes.md`
 
 ## Planning Phase (/feature-plan)
 
@@ -64,9 +68,13 @@ Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
 - `2026-02-19T18:07:59Z` - M0.2 parity fixture check passed: update rewrite (`entity-views/update.test.ts`).
 - `2026-02-19T18:07:58Z` - M0.2 parity fixture check passed: delete rewrite (`entity-views/delete.test.ts`).
 - `2026-02-19T18:07:59Z` - M0.2 parity fixture check passed: validation failure (`validate-state-mutation.test.ts`).
+- `2026-02-19T18:14:10Z` - Began M0.3 rollout-mode implementation and verification.
+- `2026-02-19T17:57:08Z` - M0.3 rollout tests passed (`3/3` selected): `pnpm --filter @lix-js/sdk exec vitest run src/lix/open-lix.test.ts -t "rust rewrite rollout|rust_active mode works|rust_shadow can be enabled independently"`.
+- `2026-02-19T17:57:20Z` - M0.3 SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
+- `2026-02-19T17:57:21Z` - M0.3 SDK lint passed: `pnpm --filter @lix-js/sdk lint`.
 
 ## Next Steps
 
-1. Complete M0.3 by adding SDK rollout mode flags for `legacy` and `rust_active`, with `rust_shadow` optional and disabled by default.
-2. Add verification proving `legacy` and `rust_active` initialize correctly when `rust_shadow` is not enabled.
-3. Keep rollout scope constrained to Phase 0 (no default-on migration or later-phase behavior).
+1. Start Phase 1 by implementing Rust callback adapter wiring behind `rust_active` in SDK environment bootstrap while preserving SQLite lifecycle ownership in SDK.
+2. Add side-by-side adapter-level tests for callback serialization/deserialization and deterministic error `code` propagation from Rust boundary to JS.
+3. Keep `legacy` as default and retain `rust_shadow` optional until Phase 1 verification gates pass.

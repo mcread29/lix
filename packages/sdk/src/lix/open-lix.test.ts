@@ -1,7 +1,12 @@
 import { expect, test } from "vitest";
 import { newLixFile } from "./new-lix.js";
 import type { LixPlugin } from "../plugin/lix-plugin.js";
-import { openLix, usedFileExtensions } from "./open-lix.js";
+import {
+	openLix,
+	resolveRustRewriteRolloutConfig,
+	RUST_REWRITE_ROLLOUT_MODES,
+	usedFileExtensions,
+} from "./open-lix.js";
 import type { LixAccount } from "../account/schema-definition.js";
 import { OpfsSahEnvironment } from "../environment/opfs-sah.js";
 
@@ -527,4 +532,48 @@ test("provided key values respect lixcol_untracked setting", async () => {
 		lixcol_version_id: "global",
 		lixcol_untracked: 1, // untracked
 	});
+});
+
+test("rust rewrite rollout defaults to legacy with shadow disabled", async () => {
+	const lix = await openLix({ blob: await newLixFile() });
+
+	expect(lix.rustRewrite).toMatchObject({
+		mode: "legacy",
+		rustShadowEnabled: false,
+	});
+});
+
+test("rust_active mode works while rust_shadow remains optional", async () => {
+	const lix = await openLix({
+		blob: await newLixFile(),
+		rustRewrite: {
+			mode: "rust_active",
+		},
+	});
+
+	expect(lix.rustRewrite).toMatchObject({
+		mode: "rust_active",
+		rustShadowEnabled: false,
+	});
+});
+
+test("rust_shadow can be enabled independently", () => {
+	const config = resolveRustRewriteRolloutConfig({
+		rustRewrite: {
+			mode: "rust_active",
+			rustShadow: {
+				enabled: true,
+			},
+		},
+	});
+
+	expect(config).toEqual({
+		mode: "rust_active",
+		rustShadowEnabled: true,
+	});
+	expect(RUST_REWRITE_ROLLOUT_MODES).toEqual([
+		"legacy",
+		"rust_active",
+		"rust_shadow",
+	]);
 });

@@ -17,6 +17,7 @@ import { loadPluginFromString } from "../environment/load-from-string.js";
 
 export type Lix = {
 	db: Kysely<LixDatabaseSchema>;
+	rustRewrite: RustRewriteRolloutConfig;
 	plugin: {
 		getAll: () => Promise<LixPlugin[]>;
 	};
@@ -114,29 +115,20 @@ export type Lix = {
 	engine?: LixEngine;
 };
 
-/**
- * Opens a Lix instance.
- *
- * Creates an in-memory database by default. If a blob is provided,
- * the database is initialized with that data. If a database is provided,
- * uses that database directly.
- *
- * @example
- * ```ts
- * // In-memory (default)
- * const lix = await openLix({})
- *
- * // From existing data
- * const lix = await openLix({ blob: existingLixFile })
- *
- * // With custom storage adapter
- * import { MyCustomStorage } from "./my-custom-storage.js"
- * const lix = await openLix({
- *   storage: new MyCustomStorage()
- * })
- * ```
- */
-export async function openLix(args: {
+export const RUST_REWRITE_ROLLOUT_MODES = [
+	"legacy",
+	"rust_active",
+	"rust_shadow",
+] as const;
+
+export type RustRewriteRolloutMode = (typeof RUST_REWRITE_ROLLOUT_MODES)[number];
+
+export type RustRewriteRolloutConfig = {
+	mode: RustRewriteRolloutMode;
+	rustShadowEnabled: boolean;
+};
+
+export type OpenLixArgs = {
 	/**
 	 * The account that is opening this lix.
 	 *
@@ -199,9 +191,57 @@ export async function openLix(args: {
 	 *   const lix = await openLix({ keyValues: [{ key: "lix_sync", value: "false" }] })
 	 */
 	keyValues?: NewStateByVersion<LixKeyValue>[];
-}): Promise<Lix> {
+
+	/**
+	 * Phase 0 Rust rewrite rollout flags.
+	 *
+	 * `mode` defaults to `legacy` and `rustShadow.enabled` defaults to `false`.
+	 * Keeping `rust_shadow` optional allows shipping `rust_active` while shadow
+	 * execution is still disabled.
+	 */
+	rustRewrite?: {
+		mode?: RustRewriteRolloutMode;
+		rustShadow?: {
+			enabled?: boolean;
+		};
+	};
+};
+
+export function resolveRustRewriteRolloutConfig(
+	args: OpenLixArgs
+): RustRewriteRolloutConfig {
+	return {
+		mode: args.rustRewrite?.mode ?? "legacy",
+		rustShadowEnabled: args.rustRewrite?.rustShadow?.enabled ?? false,
+	};
+}
+
+/**
+ * Opens a Lix instance.
+ *
+ * Creates an in-memory database by default. If a blob is provided,
+ * the database is initialized with that data. If a database is provided,
+ * uses that database directly.
+ *
+ * @example
+ * ```ts
+ * // In-memory (default)
+ * const lix = await openLix({})
+ *
+ * // From existing data
+ * const lix = await openLix({ blob: existingLixFile })
+ *
+ * // With custom storage adapter
+ * import { MyCustomStorage } from "./my-custom-storage.js"
+ * const lix = await openLix({
+ *   storage: new MyCustomStorage()
+ * })
+ * ```
+ */
+export async function openLix(args: OpenLixArgs): Promise<Lix> {
 	const hooks = createHooks();
 	const blob = args.blob;
+	const rustRewrite = resolveRustRewriteRolloutConfig(args);
 	let engine: LixEngine | undefined;
 	const hostPlugins: LixPlugin[] = [];
 
@@ -231,6 +271,7 @@ export async function openLix(args: {
 			providePluginsRaw: providedPluginStrings,
 			account: args.account,
 			keyValues: args.keyValues,
+			rustRewrite,
 		},
 	} as const;
 
@@ -268,6 +309,7 @@ export async function openLix(args: {
 	const lix: Lix = {
 		// sqlite intentionally not exposed in environment mode
 		db,
+		rustRewrite,
 		hooks,
 		observe,
 		engine: engine,
