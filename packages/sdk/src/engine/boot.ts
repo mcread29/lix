@@ -17,7 +17,10 @@ import {
 import { registerBuiltinFunctions } from "./functions/register-builtins.js";
 import type { PreprocessorFn } from "./preprocessor/types.js";
 import { createPreprocessor } from "./preprocessor/create-preprocessor.js";
-import { registerRustCallbackAdapterFunctions } from "./rust-rewrite/callback-adapter.js";
+import {
+	registerRustCallbackAdapterFunctions,
+	toExecutePreprocessMode,
+} from "./rust-rewrite/callback-adapter.js";
 
 export type EngineEvent = {
 	type: "state_commit";
@@ -282,6 +285,7 @@ export async function boot(env: BootEnv): Promise<LixEngine> {
 					const result = engine.executeSync({
 						sql: request.sql,
 						parameters: request.params,
+						preprocessMode: toExecutePreprocessMode(request.statementKind),
 					});
 					return {
 						rows: result.rows,

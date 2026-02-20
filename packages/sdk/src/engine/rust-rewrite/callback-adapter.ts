@@ -7,6 +7,7 @@ import {
 	type RustExecuteResponse,
 } from "./callback-contract.js";
 import type { FunctionRegistry } from "../functions/function-registry.js";
+import { parse } from "../preprocessor/sql-parser/parse.js";
 
 export const LIX_RUST_CALLBACK_EXECUTE = "lix_rust_callback_execute";
 export const LIX_RUST_CALLBACK_DETECT_CHANGES =
@@ -54,6 +55,11 @@ export type RustCallbackAdapter = {
 		request: RustDetectChangesWireRequest
 	) => RustDetectChangesWireResponse;
 };
+
+export type RustRoutedStatementKind = Extract<
+	RustExecuteRequest["statementKind"],
+	"read_rewrite" | "passthrough"
+>;
 
 export function createRustCallbackAdapter(
 	deps: RustCallbackAdapterDependencies
@@ -117,8 +123,40 @@ export function deserializeExecuteRequest(
 		requestId: request.requestId,
 		sql: request.sql,
 		params: parsedParams,
-		statementKind: request.statementKind,
+		statementKind: routeRustExecuteStatementKind(request.sql),
 	};
+}
+
+export function routeRustExecuteStatementKind(sql: string): RustRoutedStatementKind {
+	const statements = parse(sql);
+	if (statements.length === 0) {
+		return "passthrough";
+	}
+
+	for (const statement of statements) {
+		for (const segment of statement.segments) {
+			if (segment.node_kind === "raw_fragment") {
+				return "passthrough";
+			}
+			if (
+				segment.node_kind !== "select_statement" &&
+				segment.node_kind !== "compound_select"
+			) {
+				return "passthrough";
+			}
+		}
+	}
+
+	return "read_rewrite";
+}
+
+export function toExecutePreprocessMode(
+	statementKind: RustExecuteRequest["statementKind"]
+): "full" | "none" {
+	if (statementKind === "read_rewrite") {
+		return "full";
+	}
+	return "none";
 }
 
 export function serializeExecuteResponse(

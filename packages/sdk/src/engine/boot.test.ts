@@ -151,6 +151,34 @@ test("rust_active mode exposes rust execute callback route", async () => {
 	sqlite.close();
 });
 
+test("rust_active execute route supports passthrough SQL via callback surface", async () => {
+	const sqlite = await createInMemoryDatabase({ readOnly: false });
+	const blob = await newLixFile();
+	const buf = new Uint8Array(await blob.arrayBuffer());
+	importDatabase({ db: sqlite, content: buf });
+
+	const engine = await boot({
+		sqlite,
+		emit: () => {},
+		args: {
+			rustRewrite: { mode: "rust_active" },
+		},
+	});
+
+	const response = await engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+		requestId: "active-2",
+		sql: "pragma user_version",
+		paramsJson: "[]",
+		statementKind: "read_rewrite",
+	});
+
+	const decoded = deserializeExecuteResponse(response as any);
+	expect(decoded.rows.length).toBe(1);
+	expect(decoded.rows[0]).toHaveProperty("user_version");
+
+	sqlite.close();
+});
+
 test("rust_active detectChanges route returns deterministic boundary code", async () => {
 	const sqlite = await createInMemoryDatabase({ readOnly: false });
 	const blob = await newLixFile();

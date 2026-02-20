@@ -2,9 +2,12 @@ import { describe, expect, test } from "vitest";
 import {
 	createRustCallbackAdapter,
 	deserializeDetectChangesResponse,
+	deserializeExecuteRequest,
 	deserializeExecuteResponse,
+	routeRustExecuteStatementKind,
 	serializeDetectChangesRequest,
 	serializeExecuteRequest,
+	toExecutePreprocessMode,
 } from "./callback-adapter.js";
 
 describe("rust callback adapter", () => {
@@ -101,5 +104,31 @@ describe("rust callback adapter", () => {
 		} catch (error) {
 			expect(error).toMatchObject({ code: "LIX_RUST_PROTOCOL_MISMATCH" });
 		}
+	});
+
+	test("routes read-rewrite SQL deterministically", () => {
+		const sql = "select 1 as value";
+		expect(routeRustExecuteStatementKind(sql)).toBe("read_rewrite");
+		expect(routeRustExecuteStatementKind(sql)).toBe("read_rewrite");
+		expect(toExecutePreprocessMode(routeRustExecuteStatementKind(sql))).toBe(
+			"full"
+		);
+	});
+
+	test("routes passthrough SQL deterministically", () => {
+		const sql = "pragma user_version";
+		expect(routeRustExecuteStatementKind(sql)).toBe("passthrough");
+		expect(routeRustExecuteStatementKind(sql)).toBe("passthrough");
+		expect(toExecutePreprocessMode(routeRustExecuteStatementKind(sql))).toBe(
+			"none"
+		);
+
+		const request = deserializeExecuteRequest({
+			requestId: "req-5",
+			sql,
+			paramsJson: "[]",
+			statementKind: "read_rewrite",
+		});
+		expect(request.statementKind).toBe("passthrough");
 	});
 });
