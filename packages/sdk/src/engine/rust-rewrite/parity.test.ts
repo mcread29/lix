@@ -110,4 +110,70 @@ describe("rust rewrite parity", () => {
 		legacy.sqlite.close();
 		active.sqlite.close();
 	});
+
+	test("boundary value marshalling parity between legacy and rust_active", async () => {
+		const legacy = await createEngine("legacy");
+		const active = await createEngine("rust_active");
+
+		const sql =
+			"select ? as nullable_value, ? as large_integer, ? as fractional_value, ? as text_value, length(?) as blob_size";
+		const parameters = [
+			null,
+			9007199254740991,
+			-0.25,
+			"boundary-text",
+			new Uint8Array([0, 16, 255]),
+		] as const;
+
+		const legacyResult = legacy.engine.executeSync({ sql, parameters });
+
+		const activeResponse = await active.engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+			requestId: "parity-boundary",
+			sql,
+			paramsJson: JSON.stringify([
+				parameters[0],
+				parameters[1],
+				parameters[2],
+				parameters[3],
+				Array.from(parameters[4]),
+			]),
+			statementKind: "passthrough",
+		});
+		const activeResult = deserializeExecuteResponse(activeResponse as any);
+
+		expect(activeResult.rows).toEqual(legacyResult.rows);
+
+		legacy.sqlite.close();
+		active.sqlite.close();
+	});
+
+	test("rust_active execute callback keeps deterministic error surfaces", async () => {
+		const active = await createEngine("rust_active");
+
+		try {
+			await active.engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+				requestId: "parity-errors-1",
+				sql: "select * from table_that_does_not_exist",
+				paramsJson: "[]",
+				statementKind: "read_rewrite",
+			});
+			expect.fail("expected sqlite execution error");
+		} catch (error) {
+			expect(error).toMatchObject({ code: "LIX_RUST_SQLITE_EXECUTION" });
+		}
+
+		try {
+			await active.engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+				requestId: "parity-errors-2",
+				sql: "select 1",
+				paramsJson: "{\"not\":\"an array\"}",
+				statementKind: "read_rewrite",
+			});
+			expect.fail("expected protocol mismatch");
+		} catch (error) {
+			expect(error).toMatchObject({ code: "LIX_RUST_PROTOCOL_MISMATCH" });
+		}
+
+		active.sqlite.close();
+	});
 });

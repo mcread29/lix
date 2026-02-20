@@ -1,10 +1,12 @@
 import { describe, expect, test } from "vitest";
 import {
+	configureRustExecutePlanner,
 	configureRustStatementKindRouter,
 	createRustCallbackAdapter,
 	deserializeDetectChangesResponse,
 	deserializeExecuteRequest,
 	deserializeExecuteResponse,
+	planRustExecute,
 	routeRustExecuteStatementKind,
 	serializeDetectChangesRequest,
 	serializeExecuteRequest,
@@ -13,11 +15,36 @@ import {
 
 describe("rust callback adapter", () => {
 	test("uses configured statement router when available", () => {
+		configureRustExecutePlanner(undefined);
 		configureRustStatementKindRouter(() => "write_rewrite");
 		expect(routeRustExecuteStatementKind("select 1 as value")).toBe(
 			"write_rewrite"
 		);
 		configureRustStatementKindRouter(undefined);
+	});
+
+	test("uses configured execute planner when available", () => {
+		configureRustExecutePlanner(() => ({
+			statementKind: "validation",
+			preprocessMode: "full",
+			rowsAffectedMode: "sqlite_changes",
+		}));
+
+		expect(planRustExecute("select 1 as value")).toEqual({
+			statementKind: "validation",
+			preprocessMode: "full",
+			rowsAffectedMode: "sqlite_changes",
+		});
+
+		const request = deserializeExecuteRequest({
+			requestId: "planner-1",
+			sql: "select 1 as value",
+			paramsJson: "[]",
+			statementKind: "read_rewrite",
+		});
+		expect(request.statementKind).toBe("validation");
+
+		configureRustExecutePlanner(undefined);
 	});
 
 	test("serializes and deserializes execute payloads", () => {
@@ -156,5 +183,25 @@ describe("rust callback adapter", () => {
 			statementKind: "read_rewrite",
 		});
 		expect(request.statementKind).toBe("write_rewrite");
+	});
+
+	test("routes validation SQL deterministically", () => {
+		const sql =
+			"insert into state (entity_id, schema_key, file_id, plugin_key, snapshot_content, schema_version, metadata, untracked) values (?, ?, ?, ?, json(?), ?, json(?), 0)";
+
+		expect(routeRustExecuteStatementKind(sql)).toBe("validation");
+		expect(planRustExecute(sql)).toMatchObject({
+			statementKind: "validation",
+			preprocessMode: "full",
+			rowsAffectedMode: "sqlite_changes",
+		});
+
+		const request = deserializeExecuteRequest({
+			requestId: "req-7",
+			sql,
+			paramsJson: "[]",
+			statementKind: "read_rewrite",
+		});
+		expect(request.statementKind).toBe("validation");
 	});
 });

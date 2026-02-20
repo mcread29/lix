@@ -36,10 +36,17 @@ describe("rust host bridge", () => {
 			params: [],
 			statementKind: "write_rewrite",
 		});
+		bridge.execute({
+			requestId: "req-4",
+			sql: "insert into state (entity_id, schema_key, file_id, plugin_key, snapshot_content, schema_version, metadata, untracked) values (?, ?, ?, ?, json(?), ?, json(?), 0)",
+			params: [],
+			statementKind: "read_rewrite",
+		});
 
 		expect(calls).toEqual([
 			{ preprocessMode: "full" },
 			{ preprocessMode: "none" },
+			{ preprocessMode: "full" },
 			{ preprocessMode: "full" },
 		]);
 	});
@@ -61,6 +68,24 @@ describe("rust host bridge", () => {
 
 		expect(response.rowsAffected).toBe(2);
 		expect(response.lastInsertRowId).toBe(41);
+	});
+
+	test("uses execute metadata for validation rows affected", () => {
+		const bridge = createRustHostBridge({
+			engine: {
+				executeSync: () => ({ rows: [{ accepted: true }], rowsAffected: 3 }),
+				getAllPluginsSync: () => [],
+			} as Pick<LixEngine, "executeSync" | "getAllPluginsSync">,
+		});
+
+		const response = bridge.execute({
+			requestId: "req-validation",
+			sql: "insert into state (entity_id, schema_key, file_id, plugin_key, snapshot_content, schema_version, metadata, untracked) values (?, ?, ?, ?, json(?), ?, json(?), 0)",
+			params: [],
+			statementKind: "read_rewrite",
+		});
+
+		expect(response.rowsAffected).toBe(3);
 	});
 
 	test("bridges detectChanges through plugin callback", () => {

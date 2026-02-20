@@ -58,19 +58,34 @@ export type RustCallbackAdapter = {
 
 export type RustRoutedStatementKind = Extract<
 	RustExecuteRequest["statementKind"],
-	"read_rewrite" | "write_rewrite" | "passthrough"
+	"read_rewrite" | "write_rewrite" | "validation" | "passthrough"
 >;
+
+export type RustExecutePlanning = {
+	statementKind: RustRoutedStatementKind;
+	preprocessMode: "full" | "none";
+	rowsAffectedMode: "rows_length" | "sqlite_changes";
+};
 
 export type RustStatementKindRouter = (
 	sql: string
 ) => RustRoutedStatementKind;
 
+export type RustExecutePlanner = (sql: string) => RustExecutePlanning;
+
 let configuredRustStatementKindRouter: RustStatementKindRouter | undefined;
+let configuredRustExecutePlanner: RustExecutePlanner | undefined;
 
 export function configureRustStatementKindRouter(
 	router: RustStatementKindRouter | undefined
 ): void {
 	configuredRustStatementKindRouter = router;
+}
+
+export function configureRustExecutePlanner(
+	planner: RustExecutePlanner | undefined
+): void {
+	configuredRustExecutePlanner = planner;
 }
 
 export function createRustCallbackAdapter(
@@ -131,11 +146,32 @@ export function deserializeExecuteRequest(
 	request: RustExecuteWireRequest
 ): RustExecuteRequest {
 	const parsedParams = parseJsonArray(request.paramsJson, "execute.paramsJson");
+	const plan = planRustExecute(request.sql);
 	return {
 		requestId: request.requestId,
 		sql: request.sql,
 		params: parsedParams.map((value) => deserializeExecuteParamValue(value)),
-		statementKind: routeRustExecuteStatementKind(request.sql),
+		statementKind: plan.statementKind,
+	};
+}
+
+export function planRustExecute(sql: string): RustExecutePlanning {
+	if (configuredRustExecutePlanner) {
+		try {
+			return configuredRustExecutePlanner(sql);
+		} catch {
+			// Fall through to SDK parser to preserve behavior when native planner is unavailable.
+		}
+	}
+
+	const statementKind = routeRustExecuteStatementKind(sql);
+	return {
+		statementKind,
+		preprocessMode: toExecutePreprocessMode(statementKind),
+		rowsAffectedMode:
+			statementKind === "read_rewrite" || statementKind === "passthrough"
+				? "rows_length"
+				: "sqlite_changes",
 	};
 }
 
@@ -152,6 +188,8 @@ export function routeRustExecuteStatementKind(sql: string): RustRoutedStatementK
 	if (statements.length === 0) {
 		return "passthrough";
 	}
+
+	const validationSql = isValidationSql(sql);
 
 	let sawRead = false;
 	let sawWrite = false;
@@ -179,13 +217,14 @@ export function routeRustExecuteStatementKind(sql: string): RustRoutedStatementK
 				continue;
 			}
 
-			if (segment.node_kind !== "statement") {
-				return "passthrough";
-			}
+			return "passthrough";
 		}
 	}
 
 	if (sawWrite) {
+		if (validationSql) {
+			return "validation";
+		}
 		return "write_rewrite";
 	}
 
@@ -194,6 +233,12 @@ export function routeRustExecuteStatementKind(sql: string): RustRoutedStatementK
 	}
 
 	return "read_rewrite";
+}
+
+function isValidationSql(sql: string): boolean {
+	return /\b(?:insert\s+into|update|delete\s+from)\s+[`"']?(?:state|state_all)[`"']?\b/i.test(
+		sql
+	);
 }
 
 export function toExecutePreprocessMode(

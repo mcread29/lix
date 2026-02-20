@@ -2,7 +2,7 @@ import type { LixPlugin } from "../../plugin/lix-plugin.js";
 import { createQuerySync } from "../../plugin/query-sync.js";
 import type { LixEngine } from "../boot.js";
 import {
-	toExecutePreprocessMode,
+	planRustExecute,
 	type RustCallbackAdapterDependencies,
 } from "./callback-adapter.js";
 
@@ -17,15 +17,15 @@ export function createRustHostBridge(args: {
 
 	return {
 			execute: (request) => {
+				const plan = planRustExecute(request.sql);
 				const result = engine.executeSync({
 					sql: request.sql,
 					parameters: request.params,
-					preprocessMode: toExecutePreprocessMode(request.statementKind),
+					preprocessMode: plan.preprocessMode,
 				});
 
 				const rowsAffected =
-					request.statementKind === "read_rewrite" ||
-					request.statementKind === "passthrough"
+					plan.rowsAffectedMode === "rows_length"
 						? result.rows.length
 						: result.rowsAffected;
 				return {

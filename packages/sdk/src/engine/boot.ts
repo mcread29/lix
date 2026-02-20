@@ -18,6 +18,7 @@ import { registerBuiltinFunctions } from "./functions/register-builtins.js";
 import type { PreprocessorFn } from "./preprocessor/types.js";
 import { createPreprocessor } from "./preprocessor/create-preprocessor.js";
 import {
+	configureRustExecutePlanner,
 	configureRustStatementKindRouter,
 	registerRustCallbackAdapterFunctions,
 } from "./rust-rewrite/callback-adapter.js";
@@ -281,7 +282,7 @@ export async function boot(env: BootEnv): Promise<LixEngine> {
 	registerBuiltinFunctions({ register: fnRegistry.register, engine });
 
 	if (env.args.rustRewrite?.mode === "rust_active") {
-		await configureRustNativeStatementRouter();
+		await configureRustNativeExecutionPlanner();
 		const rustHostBridge = createRustHostBridge({ engine });
 		registerRustCallbackAdapterFunctions({
 			register: fnRegistry.register,
@@ -296,11 +297,13 @@ export async function boot(env: BootEnv): Promise<LixEngine> {
 	return engine;
 }
 
-async function configureRustNativeStatementRouter(): Promise<void> {
+async function configureRustNativeExecutionPlanner(): Promise<void> {
 	try {
 		const module = await import("@lix-js/sdk-rust-engine-node");
+		configureRustExecutePlanner((sql) => module.planExecuteInRust(sql));
 		configureRustStatementKindRouter((sql) => module.routeStatementKindInRust(sql));
 	} catch {
+		configureRustExecutePlanner(undefined);
 		configureRustStatementKindRouter(undefined);
 	}
 }
