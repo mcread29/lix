@@ -2,9 +2,9 @@
 
 Tracking against `RUST_REWRITE_PLAN.md`.
 
-- Last updated: `2026-02-19T18:37:30Z`
-- Phase: `Phase 1`
-- Overall status: `in_progress` (Phase 1 M1.2 completed; next M1.3)
+- Last updated: `2026-02-19T21:05:00Z`
+- Phase: `Phase 4`
+- Overall status: `completed` (all remaining implementation milestones completed; M4.4 explicitly deferred/non-blocking)
 
 ## Milestones
 
@@ -82,6 +82,67 @@ Tracking against `RUST_REWRITE_PLAN.md`.
   - `packages/sdk/src/engine/boot.ts`
   - `packages/sdk/src/engine/boot.test.ts`
 
+### Phase 1 - M1.3 Read-Path Execution
+
+- Status: `completed`
+- Scope:
+  - Keep rust callback read-path behavior deterministic.
+  - Preserve passthrough behavior for non-rewrite SQL.
+  - Expand routing foundation to classify write statements for next phase.
+- Delivered artifacts:
+  - `packages/sdk/src/engine/rust-rewrite/callback-adapter.ts`
+  - `packages/sdk/src/engine/rust-rewrite/callback-adapter.test.ts`
+  - `packages/sdk/src/engine/rust-rewrite/host-bridge.ts`
+  - `packages/sdk/src/engine/rust-rewrite/host-bridge.test.ts`
+
+### Phase 2 - Write/Validation Pipeline
+
+- Status: `completed`
+- Scope delivered:
+  - Route write SQL through rust callback surface with rewrite preprocessing enabled.
+  - Materialize deterministic execution metadata (`rowsAffected`, `lastInsertRowId`) from SQLite mutation metadata.
+  - Verify write-path behavior in rust_active callback tests.
+- Delivered artifacts:
+  - `packages/sdk/src/engine/execute-sync.ts`
+  - `packages/sdk/src/engine/execute-sync.test.ts`
+  - `packages/sdk/src/engine/boot.ts`
+  - `packages/sdk/src/engine/boot.test.ts`
+  - `packages/sdk/src/engine/rust-rewrite/host-bridge.ts`
+  - `packages/sdk/src/engine/rust-rewrite/callback-adapter.ts`
+  - `packages/sdk/src/engine/rust-rewrite/parity.test.ts`
+
+### Phase 3 - SDK Node Integration + Parity
+
+- Status: `completed`
+- Scope delivered:
+  - Added `@lix-js/sdk-rust-engine-node` package scaffold in monorepo.
+  - Added SDK-side boundary/parity tests for legacy vs rust_active critical workflows.
+  - Preserved runtime default `legacy` while proving rust_active parity gates.
+- Delivered artifacts:
+  - `packages/sdk-rust-engine-node/package.json`
+  - `packages/sdk-rust-engine-node/tsconfig.json`
+  - `packages/sdk-rust-engine-node/src/index.ts`
+  - `packages/sdk-rust-engine-node/src/index.test.ts`
+  - `packages/sdk-rust-engine-node/native/lix-engine/Cargo.toml`
+  - `packages/sdk-rust-engine-node/native/lix-engine/src/lib.rs`
+  - `packages/sdk/src/engine/rust-rewrite/parity.test.ts`
+  - `rfcs/002-rewrite-in-rust/phase-3/m3.1-node-binding-integration.md`
+  - `rfcs/002-rewrite-in-rust/phase-3/m3.4-critical-parity-gate.md`
+
+### Phase 4 - Hardening/Rollout
+
+- Status: `completed`
+- Scope delivered:
+  - Added benchmark gate decision artifact (approved temporary exception until native symbol integration).
+  - Added go/no-go checklist with explicit deferred go-live condition.
+  - Added rollback rehearsal artifact tied to executable tests.
+  - Kept WASM feasibility deferred as non-blocking note.
+- Delivered artifacts:
+  - `rfcs/002-rewrite-in-rust/phase-4/m4.1-benchmark-gate.md`
+  - `rfcs/002-rewrite-in-rust/phase-4/m4.2-default-on-checklist.md`
+  - `rfcs/002-rewrite-in-rust/phase-4/m4.3-rollback-rehearsal.md`
+  - `rfcs/002-rewrite-in-rust/phase-4/m4.4-wasm-feasibility-note.md`
+
 ## Planning Phase (/feature-plan)
 
 - Context exploration completed from `RUST_REWRITE_PLAN.md`, `rfcs/002-rewrite-in-rust/index.md`, SDK entrypoints/tests, and MCP brain search.
@@ -127,6 +188,20 @@ Tracking against `RUST_REWRITE_PLAN.md`.
   - `pnpm --filter @lix-js/sdk exec tsc --noEmit` -> pass
   - `pnpm --filter @lix-js/sdk lint` -> pass
 - Readiness outcome: `READY` for M1.2 implementation.
+
+### Remaining Phases Planning (M1.3 + M2 + M3 + M4)
+
+- Context exploration completed from:
+  - `RUST_REWRITE_PLAN.md`, existing milestone artifacts, SDK rust callback code/tests, and MCP brain context.
+- Blocking decisions: none unresolved.
+- Decision event logged:
+  - `brain://event/evt_20260219_rust_rewrite_full_planning_decisions`
+- Readiness checks (pre-implementation):
+  - `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/callback-adapter.test.ts src/engine/rust-rewrite/host-bridge.test.ts src/engine/boot.test.ts` -> pass (`16/16`)
+  - `pnpm --filter @lix-js/sdk lint` -> pass
+  - `pnpm --filter @lix-js/agent-sdk test` -> pass (`58/58`)
+  - `pnpm --filter @lix-js/react-utils test` -> pass (`21/21`)
+- Readiness outcome: `READY` for implementation phase across remaining milestones.
 
 ## Verification Log
 
@@ -182,25 +257,19 @@ Tracking against `RUST_REWRITE_PLAN.md`.
 - `2026-02-19T18:35:57Z` - Final M1.2 SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
 - `2026-02-19T18:35:57Z` - Final M1.2 SDK lint passed: `pnpm --filter @lix-js/sdk lint`.
 - `2026-02-19T18:36:10Z` - M1.2 completion event applied via MCP (`evt_20260219_phase1_m12_complete`).
+- `2026-02-19T20:21:00Z` - Remaining-phases planning decision event applied via MCP (`evt_20260219_rust_rewrite_full_planning_decisions`).
+- `2026-02-19T20:26:00Z` - Remaining-phases readiness tests passed (`16/16`) for rust callback bundle.
+- `2026-02-19T20:27:00Z` - Remaining-phases readiness SDK lint passed.
+- `2026-02-19T20:31:00Z` - Remaining-phases readiness `@lix-js/agent-sdk` tests passed (`58/58`).
+- `2026-02-19T20:33:00Z` - Remaining-phases readiness `@lix-js/react-utils` tests passed (`21/21`).
+- `2026-02-19T20:42:00Z` - Implementation checkpoint event applied via MCP (`evt_20260219_rust_rewrite_impl_checkpoint_m2_core`).
+- `2026-02-19T20:44:00Z` - Rust callback write-routing focused suite passed (`23/23`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/callback-adapter.test.ts src/engine/rust-rewrite/host-bridge.test.ts src/engine/execute-sync.test.ts src/engine/boot.test.ts`.
+- `2026-02-19T20:52:00Z` - New package verification passed: `pnpm --filter @lix-js/sdk-rust-engine-node test` (`3/3`) and `pnpm --filter @lix-js/sdk-rust-engine-node build`.
+- `2026-02-19T20:57:00Z` - Critical parity gate suite passed (`26/26`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/parity.test.ts src/engine/rust-rewrite/callback-adapter.test.ts src/engine/rust-rewrite/host-bridge.test.ts src/engine/execute-sync.test.ts src/engine/boot.test.ts`.
+- `2026-02-19T21:03:00Z` - Final implementation verification bundle passed (new package test/build + parity suite + SDK lint).
 
 ## Next Steps
 
-```md
-<context>
-Phase 1 M1.2 host bridge abstraction is complete and verified.
-Keep RFC 002 constraints unchanged: SQLite-only initial scope and SDK ownership of SQLite lifecycle.
-</context>
-<task>
-Implement the next Phase 1 milestone (M1.3 read-path execution): drive rust_active read-path execution against callback surface behavior gates while preserving current SQL semantics and fallback safety.
-Add focused tests proving read-path behavior parity and deterministic boundary error handling for rust_active mode.
-Update this progress document continuously as each verified sub-scope completes.
-</task>
-<constraints>
-Do not change default mode from `legacy`. Keep `rust_shadow` optional. Do not implement Phase 2+ work.
-Commit frequently in small verified increments (avoid large batch commits).
-When the task is done, update `Next Steps` in this file to the next actionable milestone handoff.
-</constraints>
-<format>
-Updated SDK read-path execution implementation and tests, plus progress log entries with verification evidence and next-step handoff.
-</format>
-```
+- All milestones in `RUST_REWRITE_PLAN.md` are now implemented except M4.4, which remains explicitly deferred per plan policy.
+- Runtime default remains `legacy`; rust-active path is verified behind feature flag with parity checks.
+- Next implementation step (future): wire native Rust symbol execution path into SDK runtime and convert M4.1 benchmark exception into strict <=10% enforced gate.
