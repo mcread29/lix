@@ -1,7 +1,9 @@
 use std::env;
 use std::process;
 
-use lix_engine::{plan_execute, route_statement_kind, RUST_KIND_PASSTHROUGH};
+use lix_engine::{
+    plan_execute, rewrite_sql_for_execution, route_statement_kind, RUST_KIND_PASSTHROUGH,
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -33,6 +35,21 @@ fn main() {
                 Ok(json) => println!("{}", json),
                 Err(error) => {
                     eprintln!("failed to serialize execute plan: {}", error);
+                    process::exit(1);
+                }
+            }
+        }
+        "rewrite" => {
+            if args.len() < 4 {
+                eprintln!("expected statement kind and SQL arguments for rewrite command");
+                process::exit(2);
+            }
+            let statement_kind = args[2].as_str();
+            let sql = args[3..].join(" ");
+            match rewrite_sql_for_execution(&sql, statement_kind) {
+                Ok(rewritten) => println!("{rewritten}"),
+                Err(error) => {
+                    eprintln!("{}: {}", error.code, error.message);
                     process::exit(1);
                 }
             }

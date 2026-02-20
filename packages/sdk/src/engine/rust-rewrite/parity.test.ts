@@ -138,6 +138,28 @@ describe("rust rewrite parity", () => {
 		active.sqlite.close();
 	});
 
+	test("validation path parity between legacy and rust_active for no-op updates", async () => {
+		const legacy = await createEngine("legacy");
+		const active = await createEngine("rust_active");
+
+		const sql = "update state set metadata = json('{}') where 1 = 0";
+		const legacyResult = legacy.engine.executeSync({ sql, parameters: [] });
+
+		const activeResponse = await active.engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+			requestId: "parity-validation-noop",
+			sql,
+			paramsJson: "[]",
+			statementKind: "passthrough",
+		});
+		const activeResult = deserializeExecuteResponse(activeResponse as any);
+
+		expect(activeResult.rows).toEqual(legacyResult.rows);
+		expect(activeResult.rowsAffected).toBe(legacyResult.rowsAffected);
+
+		legacy.sqlite.close();
+		active.sqlite.close();
+	});
+
 	test("boundary value marshalling parity between legacy and rust_active", async () => {
 		const legacy = await createEngine("legacy");
 		const active = await createEngine("rust_active");
@@ -199,6 +221,18 @@ describe("rust rewrite parity", () => {
 			expect.fail("expected protocol mismatch");
 		} catch (error) {
 			expect(error).toMatchObject({ code: "LIX_RUST_PROTOCOL_MISMATCH" });
+		}
+
+		try {
+			await active.engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+				requestId: "parity-errors-3",
+				sql: "update stateful set schema_key = 'x' where entity_id = 'e'",
+				paramsJson: "[]",
+				statementKind: "passthrough",
+			});
+			expect.fail("expected validation rewrite error");
+		} catch (error) {
+			expect(error).toMatchObject({ code: "LIX_RUST_REWRITE_VALIDATION" });
 		}
 
 		active.sqlite.close();

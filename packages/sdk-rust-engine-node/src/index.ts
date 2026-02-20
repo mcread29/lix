@@ -160,14 +160,41 @@ export function planExecuteInRust(sql: string): RustEngineExecutePlan {
 	return parsed;
 }
 
+export function rewriteSqlForExecutionInRust(
+	sql: string,
+	statementKind?: RustEngineStatementKind
+): string {
+	const executablePath = resolveRustEngineRouterBinaryPath();
+	const kind = statementKind ?? routeStatementKindInRust(sql);
+	const result = spawnSync(executablePath, ["rewrite", kind, sql], {
+		encoding: "utf-8",
+	});
+
+	if (result.error) {
+		throw result.error;
+	}
+
+	if (result.status !== 0) {
+		throw new Error(
+			`rust rewriter failed with status ${result.status}: ${result.stderr.trim()}`
+		);
+	}
+
+	return result.stdout.trim();
+}
+
 export function executeWithHostInRust(args: {
 	request: RustEngineExecuteWithHostRequest;
 	host: RustEngineHostCallbacks;
 }): RustEngineExecuteWithHostResult {
 	const plan = planExecuteInRust(args.request.sql);
+	const rewrittenSql = rewriteSqlForExecutionInRust(
+		args.request.sql,
+		plan.statementKind
+	);
 	const executeResponse = args.host.execute({
 		requestId: args.request.requestId,
-		sql: args.request.sql,
+		sql: rewrittenSql,
 		params: args.request.params,
 		statementKind: plan.statementKind,
 	});

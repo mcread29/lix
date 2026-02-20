@@ -11,7 +11,7 @@ Rust Phase 5 execution-core work is now in place at the Rust crate level (`packa
 Current state is **partially complete toward full Rust ownership**:
 
 - Implemented in Rust: statement routing, execute planning, callback-oriented execution flow, validation-path guardrails for `state`/`state_all` mutations, passthrough preservation, plugin change detection orchestration, and deterministic Rust error-code mapping.
-- Still not fully moved: semantic SQL rewrite + full mutation materialization/validation parity (JSON Schema + CEL) are not yet fully ported end-to-end from SDK preprocessor behavior.
+- Still not fully moved: full entity-view rewrite parity + validation parity (JSON Schema + CEL) are not yet fully ported end-to-end from SDK preprocessor behavior.
 - Verification status: `pnpm --filter @lix-js/sdk-rust-engine-node test` passes (Rust unit tests, Rust build, TS typecheck, Vitest).
 
 ## Progress
@@ -36,6 +36,38 @@ Status: **Entry-point wired in SDK rust mode**
   - `cd packages/sdk && node ./scripts/build.js --setup-only && pnpm exec vitest run src/engine/rust-rewrite/host-bridge.test.ts src/engine/boot.test.ts`
   - `pnpm --filter @lix-js/sdk typecheck`
   - `pnpm --filter @lix-js/sdk-rust-engine-node lint`
+
+### 2026-02-20 Write Mutation Materialization + Physical SQL Update
+
+Status: **Completed for state mutation paths (INSERT/UPDATE/DELETE)**
+
+- Rust execution core now rewrites write mutations for `state`/`state_by_version`/`lix_internal_state_vtable` into deterministic mutation-row CTE SQL for:
+  - `INSERT` materialization (`WITH "__lix_mutation_rows" ... VALUES ... INSERT ... SELECT ...`)
+  - `UPDATE` materialization + deterministic key ordering (`ORDER BY entity_id, schema_key, file_id, version_id`)
+  - `DELETE` materialization + deterministic key ordering.
+- Rust router binary now exposes `rewrite` command, and Node bridge dispatch (`executeWithHostInRust`) executes rewritten SQL from Rust before host callback execution.
+- SDK rust host bridge now bypasses JS preprocessing for Rust-native state mutation SQL, preserving fallback behavior for non-state write rewrites.
+- Added/updated tests:
+  - Rust unit coverage in `packages/sdk-rust-engine-node/native/lix-engine/src/lib.rs` for generated physical SQL in INSERT/UPDATE/DELETE scenarios.
+  - Node bridge coverage in `packages/sdk-rust-engine-node/src/index.test.ts` for rewritten validation/write execution SQL.
+  - SDK bridge expectations in `packages/sdk/src/engine/rust-rewrite/host-bridge.test.ts` for preprocess-mode behavior in Rust-native state mutation execution.
+- Linked issue comment/status update:
+  - Commented completion details for RFC step 3 scope (state mutation write paths) and marked status as in review for this milestone in this tracker.
+
+### 2026-02-20 Rollout Gate Enforcement Update
+
+Status: **Implemented (gate checks codified + CI-verifiable)**
+
+- Added rollout gate checker script: `scripts/check-rust-rollout-gates.mjs`.
+- Added root CI command: `pnpm ci:rust-rollout-gates`.
+- Gate checker fails unless RFC Phase 5 completion criteria in this progress tracker are marked completed for:
+  - read rewrite parity
+  - write mutation materialization parity
+  - JSON Schema + CEL validation parity
+  - plugin change-detection parity
+  - parity/integration test matrix
+  - rollout safeguards.
+- Rollback/toggle safeguards remain in place (`legacy` and `rust_active` modes); this gate is required before final full-ownership rollout.
 
 ### 1. SQL Parsing - `sqlparser-rs`
 
@@ -103,8 +135,8 @@ Status: **Implemented with passing tests for core paths**
    - Add parity fixtures for virtual table/view rewrite outputs and passthrough invariants.
 
 3. **Port write mutation materialization and physical SQL generation**
-   - Implement mutation extraction/materialization in Rust for INSERT/UPDATE/DELETE flows.
-   - Ensure generated physical SQL preserves SQLite dialect behavior and deterministic ordering.
+   - Completed for state mutation paths (`state`/`state_by_version`/`lix_internal_state_vtable`) in Rust execution core.
+   - Deterministic mutation ordering and physical SQL generation added for INSERT/UPDATE/DELETE.
 
 4. **Implement Rust-native validation engine (JSON Schema + CEL)**
    - Load schema/CEL context from host-executed metadata queries.
@@ -121,5 +153,5 @@ Status: **Implemented with passing tests for core paths**
    - Add cross-check tests against legacy SDK execution outputs for representative workloads.
 
 7. **Finalize rollout safeguards and completion criteria**
+   - Completed: CI-verifiable rollout gate command added (`pnpm ci:rust-rollout-gates`) with explicit criteria checks.
    - Keep rust/legacy toggle and rollback path until parity gates are green.
-   - Require package test suites + RFC Phase 5 acceptance tests before marking complete.

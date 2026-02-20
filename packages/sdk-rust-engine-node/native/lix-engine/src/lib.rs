@@ -1,6 +1,11 @@
+use cel_interpreter::Program;
+use jsonschema::JSONSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlparser::ast::{Ident, ObjectName, Query, Select, SetExpr, Statement, TableAlias, TableFactor, TableWithJoins};
+use sqlparser::ast::{
+    Delete, Expr, FromTable, FunctionArg, FunctionArgExpr, FunctionArguments, Ident, Insert,
+    ObjectName, Query, Select, SetExpr, Statement, TableAlias, TableFactor, TableWithJoins,
+};
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 
@@ -20,6 +25,11 @@ pub const LIX_RUST_PROTOCOL_MISMATCH: &str = "LIX_RUST_PROTOCOL_MISMATCH";
 pub const LIX_RUST_TIMEOUT: &str = "LIX_RUST_TIMEOUT";
 pub const LIX_RUST_UNKNOWN: &str = "LIX_RUST_UNKNOWN";
 const INTERNAL_STATE_VTABLE: &str = "lix_internal_state_vtable";
+const STATE_BY_VERSION: &str = "state_by_version";
+const STATE_VIEW: &str = "state";
+const STATE_ALL_VIEW: &str = "state_all";
+const MUTATION_ROW_CTE: &str = "__lix_mutation_rows";
+const STATE_MUTATION_KEY_COLUMNS: [&str; 4] = ["entity_id", "schema_key", "file_id", "version_id"];
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -135,11 +145,16 @@ pub fn execute_with_host(
 ) -> Result<ExecuteResult, EngineError> {
     let plan = plan_execute(&request.sql);
     let statement_kind = plan.statement_kind;
-    let rewritten_sql = rewrite_sql_for_execution(&request.sql, statement_kind)?;
 
     if statement_kind == RUST_KIND_VALIDATION {
-        validate_validation_mutations(&rewritten_sql)?;
+        validate_validation_mutations(&request.sql)?;
     }
+    validate_state_mutation_rows(host, &request.sql, request.params.as_slice(), statement_kind)?;
+
+    let rewritten_sql = rewrite_sql_for_execution(&request.sql, statement_kind)?;
+
+    let should_detect_changes =
+        should_run_plugin_change_detection(statement_kind, &request.sql, request.params.as_slice());
 
     let execute_response = host
         .execute(HostExecuteRequest {
@@ -150,16 +165,15 @@ pub fn execute_with_host(
         })
         .map_err(|error| map_host_error(error, LIX_RUST_SQLITE_EXECUTION))?;
 
-    let plugin_changes =
-        if statement_kind == RUST_KIND_WRITE_REWRITE || statement_kind == RUST_KIND_VALIDATION {
-            execute_plugin_change_detection(
-                host,
-                &request.request_id,
-                request.plugin_change_requests.as_slice(),
-            )?
-        } else {
-            Vec::new()
-        };
+    let plugin_changes = if should_detect_changes {
+        execute_plugin_change_detection(
+            host,
+            &request.request_id,
+            request.plugin_change_requests.as_slice(),
+        )?
+    } else {
+        Vec::new()
+    };
 
     let rows_affected = if plan.rows_affected_mode == RUST_ROWS_AFFECTED_ROWS_LENGTH {
         execute_response.rows.len() as i64
@@ -252,16 +266,13 @@ fn is_validation_sql(sql: &str) -> bool {
         || lowered.contains("delete from state_all")
 }
 
-fn rewrite_sql_for_execution(
-    sql: &str,
-    statement_kind: &'static str,
-) -> Result<String, EngineError> {
+pub fn rewrite_sql_for_execution(sql: &str, statement_kind: &str) -> Result<String, EngineError> {
     if statement_kind == RUST_KIND_PASSTHROUGH {
         return Ok(sql.to_owned());
     }
 
     let dialect = SQLiteDialect {};
-    let mut parsed = Parser::parse_sql(&dialect, sql).map_err(|error| {
+    let parsed = Parser::parse_sql(&dialect, sql).map_err(|error| {
         EngineError::protocol_mismatch(format!("failed to parse SQL for rewrite: {error}"))
     })?;
 
@@ -271,24 +282,29 @@ fn rewrite_sql_for_execution(
         ));
     }
 
-    if statement_kind != RUST_KIND_READ_REWRITE {
-        return Ok(sql.to_owned());
-    }
-
+    let mut rewritten_statements: Vec<String> = Vec::with_capacity(parsed.len());
     let mut changed = false;
-    for statement in &mut parsed {
-        changed |= rewrite_statement_for_read_rewrite(statement)?;
+    for statement in &parsed {
+        let (rewritten, statement_changed) = match statement_kind {
+            RUST_KIND_READ_REWRITE => {
+                let mut statement_clone = statement.clone();
+                let statement_changed = rewrite_statement_for_read_rewrite(&mut statement_clone)?;
+                (statement_clone.to_string(), statement_changed)
+            }
+            RUST_KIND_WRITE_REWRITE | RUST_KIND_VALIDATION => {
+                rewrite_statement_for_write_rewrite(statement)?
+            }
+            _ => (statement.to_string(), false),
+        };
+        rewritten_statements.push(rewritten);
+        changed |= statement_changed;
     }
 
     if !changed {
         return Ok(sql.to_owned());
     }
 
-    Ok(parsed
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<String>>()
-        .join("; "))
+    Ok(rewritten_statements.join("; "))
 }
 
 fn rewrite_statement_for_read_rewrite(statement: &mut Statement) -> Result<bool, EngineError> {
@@ -373,9 +389,7 @@ fn rewrite_table_factor_for_read_rewrite(
         } => rewrite_table_with_joins_for_read_rewrite(table_with_joins),
         TableFactor::Pivot { table, .. } => rewrite_table_factor_for_read_rewrite(table),
         TableFactor::Unpivot { table, .. } => rewrite_table_factor_for_read_rewrite(table),
-        TableFactor::MatchRecognize { table, .. } => {
-            rewrite_table_factor_for_read_rewrite(table)
-        }
+        TableFactor::MatchRecognize { table, .. } => rewrite_table_factor_for_read_rewrite(table),
         _ => Ok(false),
     }
 }
@@ -453,48 +467,672 @@ fn validate_validation_mutations(sql: &str) -> Result<(), EngineError> {
 }
 
 fn is_validation_mutation_statement(statement: &Statement) -> bool {
-    let lowered = statement.to_string().to_lowercase();
-    matches_validation_table(&lowered, "insert into ")
-        || matches_validation_table(&lowered, "update ")
-        || matches_validation_table(&lowered, "delete from ")
+    match statement {
+        Statement::Insert(insert) => is_validation_target_name(&insert.table_name),
+        Statement::Update { table, .. } => {
+            let TableFactor::Table { name, .. } = &table.relation else {
+                return false;
+            };
+            is_validation_target_name(name)
+        }
+        Statement::Delete(delete) => {
+            let tables = match &delete.from {
+                FromTable::WithFromKeyword(value) => value,
+                FromTable::WithoutKeyword(value) => value,
+            };
+            let Some(first) = tables.first() else {
+                return false;
+            };
+            let TableFactor::Table { name, .. } = &first.relation else {
+                return false;
+            };
+            is_validation_target_name(name)
+        }
+        _ => false,
+    }
 }
 
-fn matches_validation_table(sql: &str, prefix: &str) -> bool {
-    if !sql.starts_with(prefix) {
-        return false;
+fn is_validation_target_name(name: &ObjectName) -> bool {
+    matches!(
+        classify_write_target(name),
+        WriteTarget::State
+            | WriteTarget::StateAll
+            | WriteTarget::StateByVersion
+            | WriteTarget::StateVtable
+    )
+}
+
+#[derive(Debug, Clone)]
+struct MutationValidationRow {
+    schema_key: String,
+    schema_version: String,
+    snapshot_content: Value,
+}
+
+fn validate_state_mutation_rows(
+    host: &dyn HostCallbacks,
+    sql: &str,
+    params: &[Value],
+    statement_kind: &str,
+) -> Result<(), EngineError> {
+    let should_validate = statement_kind == RUST_KIND_VALIDATION
+        || (statement_kind == RUST_KIND_WRITE_REWRITE && might_mutate_state_tables(sql));
+    if !should_validate {
+        return Ok(());
     }
 
-    let rest = sql[prefix.len()..].trim_start();
-    starts_with_table_token(rest, "state") || starts_with_table_token(rest, "state_all")
-}
+    let dialect = SQLiteDialect {};
+    let statements = Parser::parse_sql(&dialect, sql).map_err(|error| {
+        EngineError::rewrite_validation(format!("failed to parse mutation SQL for validation: {error}"))
+    })?;
 
-fn starts_with_table_token(input: &str, table: &str) -> bool {
-    if let Some(without_quote) = input.strip_prefix('"') {
-        if let Some(after_name) = without_quote.strip_prefix(table) {
-            return after_name.starts_with('"')
-                && has_identifier_boundary(after_name.trim_start_matches('"'));
+    let mut param_cursor: usize = 0;
+    for statement in &statements {
+        let mut rows = extract_insert_validation_rows(statement, params, &mut param_cursor)?;
+        for row in rows.drain(..) {
+            validate_single_mutation_row(host, &row)?;
         }
     }
 
-    if let Some(without_quote) = input.strip_prefix('`') {
-        if let Some(after_name) = without_quote.strip_prefix(table) {
-            return after_name.starts_with('`')
-                && has_identifier_boundary(after_name.trim_start_matches('`'));
-        }
-    }
-
-    if let Some(after_name) = input.strip_prefix(table) {
-        return has_identifier_boundary(after_name);
-    }
-
-    false
+    Ok(())
 }
 
-fn has_identifier_boundary(input: &str) -> bool {
-    match input.chars().next() {
-        None => true,
-        Some(next_char) => !next_char.is_ascii_alphanumeric() && next_char != '_',
+fn might_mutate_state_tables(sql: &str) -> bool {
+    let lowered = sql.to_lowercase();
+    lowered.contains("insert into state")
+        || lowered.contains("insert into state_by_version")
+        || lowered.contains("insert into state_all")
+        || lowered.contains("insert into lix_internal_state_vtable")
+        || lowered.contains("update state")
+        || lowered.contains("update state_by_version")
+        || lowered.contains("update state_all")
+        || lowered.contains("update lix_internal_state_vtable")
+        || lowered.contains("delete from state")
+        || lowered.contains("delete from state_by_version")
+        || lowered.contains("delete from state_all")
+        || lowered.contains("delete from lix_internal_state_vtable")
+}
+
+fn extract_insert_validation_rows(
+    statement: &Statement,
+    params: &[Value],
+    param_cursor: &mut usize,
+) -> Result<Vec<MutationValidationRow>, EngineError> {
+    let Statement::Insert(insert) = statement else {
+        return Ok(Vec::new());
+    };
+
+    if !is_validation_target_name(&insert.table_name) {
+        return Ok(Vec::new());
     }
+
+    let Some(source) = &insert.source else {
+        return Ok(Vec::new());
+    };
+    let SetExpr::Values(values) = &*source.body else {
+        return Ok(Vec::new());
+    };
+
+    let column_names: Vec<String> = if insert.columns.is_empty() {
+        vec![
+            "entity_id".to_owned(),
+            "schema_key".to_owned(),
+            "file_id".to_owned(),
+            "plugin_key".to_owned(),
+            "snapshot_content".to_owned(),
+            "schema_version".to_owned(),
+            "metadata".to_owned(),
+            "untracked".to_owned(),
+            "version_id".to_owned(),
+        ]
+    } else {
+        insert
+            .columns
+            .iter()
+            .map(|ident| ident.value.to_lowercase())
+            .collect()
+    };
+
+    let schema_key_idx = column_names
+        .iter()
+        .position(|name| name == "schema_key")
+        .ok_or_else(|| {
+            EngineError::rewrite_validation("state mutation missing required schema_key column")
+        })?;
+    let schema_version_idx = column_names
+        .iter()
+        .position(|name| name == "schema_version")
+        .ok_or_else(|| {
+            EngineError::rewrite_validation("state mutation missing required schema_version column")
+        })?;
+    let snapshot_idx = column_names
+        .iter()
+        .position(|name| name == "snapshot_content")
+        .ok_or_else(|| {
+            EngineError::rewrite_validation("state mutation missing required snapshot_content column")
+        })?;
+
+    let mut result = Vec::with_capacity(values.rows.len());
+    for row in &values.rows {
+        if row.len() != column_names.len() {
+            return Err(EngineError::rewrite_validation(
+                "insert row shape does not match declared columns",
+            ));
+        }
+
+        let schema_key =
+            evaluate_sql_expr_to_json(&row[schema_key_idx], params, param_cursor, false)?;
+        let schema_version = evaluate_sql_expr_to_json(
+            &row[schema_version_idx],
+            params,
+            param_cursor,
+            false,
+        )?;
+        let snapshot_content =
+            evaluate_sql_expr_to_json(&row[snapshot_idx], params, param_cursor, true)?;
+
+        let schema_key = schema_key.as_str().ok_or_else(|| {
+            EngineError::rewrite_validation("schema_key must resolve to a string")
+        })?;
+        let schema_version = schema_version.as_str().ok_or_else(|| {
+            EngineError::rewrite_validation("schema_version must resolve to a string")
+        })?;
+
+        result.push(MutationValidationRow {
+            schema_key: schema_key.to_owned(),
+            schema_version: schema_version.to_owned(),
+            snapshot_content,
+        });
+    }
+
+    Ok(result)
+}
+
+fn evaluate_sql_expr_to_json(
+    expr: &Expr,
+    params: &[Value],
+    param_cursor: &mut usize,
+    parse_json_strings: bool,
+) -> Result<Value, EngineError> {
+    match expr {
+        Expr::Value(value) => convert_sql_value_to_json(value, params, param_cursor, parse_json_strings),
+        Expr::Function(function) => {
+            let function_name = function.name.to_string().to_lowercase();
+            if function_name == "json" {
+                let FunctionArguments::List(argument_list) = &function.args else {
+                    return Err(EngineError::rewrite_validation(
+                        "json(...) requires an argument list",
+                    ));
+                };
+                if argument_list.args.len() != 1 {
+                    return Err(EngineError::rewrite_validation(
+                        "json(...) requires exactly one argument",
+                    ));
+                }
+                let FunctionArg::Unnamed(FunctionArgExpr::Expr(inner)) = &argument_list.args[0]
+                else {
+                    return Err(EngineError::rewrite_validation(
+                        "json(...) only supports expression arguments in Rust validation",
+                    ));
+                };
+                let value = evaluate_sql_expr_to_json(inner, params, param_cursor, true)?;
+                return Ok(value);
+            }
+
+            Err(EngineError::rewrite_validation(format!(
+                "unsupported SQL function in state validation mutation: {function_name}"
+            )))
+        }
+        _ => Err(EngineError::rewrite_validation(format!(
+            "unsupported SQL expression in validation mutation: {expr}"
+        ))),
+    }
+}
+
+fn convert_sql_value_to_json(
+    value: &sqlparser::ast::Value,
+    params: &[Value],
+    param_cursor: &mut usize,
+    parse_json_strings: bool,
+) -> Result<Value, EngineError> {
+    match value {
+        sqlparser::ast::Value::SingleQuotedString(text)
+        | sqlparser::ast::Value::DoubleQuotedString(text)
+        | sqlparser::ast::Value::TripleSingleQuotedString(text)
+        | sqlparser::ast::Value::TripleDoubleQuotedString(text)
+        | sqlparser::ast::Value::EscapedStringLiteral(text)
+        | sqlparser::ast::Value::UnicodeStringLiteral(text)
+        | sqlparser::ast::Value::NationalStringLiteral(text) => {
+            if parse_json_strings {
+                serde_json::from_str::<Value>(text).map_err(|error| {
+                    EngineError::rewrite_validation(format!(
+                        "failed to parse JSON snapshot content: {error}"
+                    ))
+                })
+            } else {
+                Ok(Value::String(text.clone()))
+            }
+        }
+        sqlparser::ast::Value::Number(number, _) => {
+            if let Ok(parsed) = number.parse::<i64>() {
+                return Ok(Value::Number(parsed.into()));
+            }
+            if let Ok(parsed) = number.parse::<f64>() {
+                if let Some(json_number) = serde_json::Number::from_f64(parsed) {
+                    return Ok(Value::Number(json_number));
+                }
+            }
+            Err(EngineError::rewrite_validation(format!(
+                "unsupported numeric literal in validation mutation: {number}"
+            )))
+        }
+        sqlparser::ast::Value::Boolean(boolean) => Ok(Value::Bool(*boolean)),
+        sqlparser::ast::Value::Null => Ok(Value::Null),
+        sqlparser::ast::Value::Placeholder(_) => {
+            let Some(bound) = params.get(*param_cursor) else {
+                return Err(EngineError::rewrite_validation(
+                    "not enough SQL parameters for validation mutation",
+                ));
+            };
+            *param_cursor += 1;
+            if parse_json_strings {
+                if let Value::String(text) = bound {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                        return Ok(parsed);
+                    }
+                }
+            }
+            Ok(bound.clone())
+        }
+        _ => Err(EngineError::rewrite_validation(format!(
+            "unsupported SQL literal in validation mutation: {value}"
+        ))),
+    }
+}
+
+fn validate_single_mutation_row(
+    host: &dyn HostCallbacks,
+    row: &MutationValidationRow,
+) -> Result<(), EngineError> {
+    let schema = fetch_stored_schema(host, &row.schema_key, &row.schema_version)?;
+    validate_cel_expressions_in_schema(&schema)?;
+    let compiled = JSONSchema::compile(&schema).map_err(|error| {
+        EngineError::rewrite_validation(format!(
+            "failed to compile schema {}@{}: {error}",
+            row.schema_key, row.schema_version
+        ))
+    })?;
+    if let Err(mut errors) = compiled.validate(&row.snapshot_content) {
+        let detail = errors
+            .next()
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "unknown validation failure".to_owned());
+        return Err(EngineError::rewrite_validation(format!(
+            "snapshot for {}@{} failed JSON Schema validation: {detail}",
+            row.schema_key, row.schema_version
+        )));
+    }
+    Ok(())
+}
+
+fn fetch_stored_schema(
+    host: &dyn HostCallbacks,
+    schema_key: &str,
+    schema_version: &str,
+) -> Result<Value, EngineError> {
+    let sql = "SELECT value FROM stored_schema \
+               WHERE json_extract(value, '$.\"x-lix-key\"') = ? \
+               AND json_extract(value, '$.\"x-lix-version\"') = ? \
+               ORDER BY rowid DESC LIMIT 1";
+    let response = host
+        .execute(HostExecuteRequest {
+            request_id: "rust-validation-schema-load".to_owned(),
+            sql: sql.to_owned(),
+            params: vec![
+                Value::String(schema_key.to_owned()),
+                Value::String(schema_version.to_owned()),
+            ],
+            statement_kind: RUST_KIND_PASSTHROUGH,
+        })
+        .map_err(|error| map_host_error(error, LIX_RUST_REWRITE_VALIDATION))?;
+
+    let Some(first_row) = response.rows.first() else {
+        return Err(EngineError::rewrite_validation(format!(
+            "schema {}@{} is not stored",
+            schema_key, schema_version
+        )));
+    };
+
+    match first_row {
+        Value::Object(record) => {
+            let Some(value) = record.get("value") else {
+                return Err(EngineError::rewrite_validation(
+                    "stored_schema row missing 'value' column",
+                ));
+            };
+            if let Value::String(text) = value {
+                serde_json::from_str::<Value>(text).map_err(|error| {
+                    EngineError::rewrite_validation(format!(
+                        "stored schema payload is not valid JSON: {error}"
+                    ))
+                })
+            } else {
+                Ok(value.clone())
+            }
+        }
+        Value::String(text) => serde_json::from_str::<Value>(text).map_err(|error| {
+            EngineError::rewrite_validation(format!(
+                "stored schema payload is not valid JSON: {error}"
+            ))
+        }),
+        _ => Err(EngineError::rewrite_validation(
+            "stored schema query returned an unsupported row shape",
+        )),
+    }
+}
+
+fn validate_cel_expressions_in_schema(schema: &Value) -> Result<(), EngineError> {
+    match schema {
+        Value::Object(record) => {
+            if let Some(Value::String(expression)) = record.get("x-lix-default") {
+                Program::compile(expression).map_err(|error| {
+                    EngineError::rewrite_validation(format!(
+                        "invalid CEL expression in x-lix-default: {error}"
+                    ))
+                })?;
+            }
+            if let Some(Value::Object(overrides)) = record.get("x-lix-override-lixcols") {
+                for (key, value) in overrides {
+                    if let Value::String(expression) = value {
+                        Program::compile(expression).map_err(|error| {
+                            EngineError::rewrite_validation(format!(
+                                "invalid CEL expression in x-lix-override-lixcols.{key}: {error}"
+                            ))
+                        })?;
+                    }
+                }
+            }
+            for value in record.values() {
+                validate_cel_expressions_in_schema(value)?;
+            }
+            Ok(())
+        }
+        Value::Array(values) => {
+            for value in values {
+                validate_cel_expressions_in_schema(value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn rewrite_statement_for_write_rewrite(
+    statement: &Statement,
+) -> Result<(String, bool), EngineError> {
+    let rewritten = match statement {
+        Statement::Insert(insert) => rewrite_insert_for_write_rewrite(insert)?,
+        Statement::Update {
+            table,
+            assignments,
+            from,
+            selection,
+            returning,
+            ..
+        } => rewrite_update_for_write_rewrite(
+            table,
+            assignments.as_slice(),
+            from,
+            selection,
+            returning,
+        ),
+        Statement::Delete(delete) => rewrite_delete_for_write_rewrite(delete),
+        _ => None,
+    };
+
+    if let Some(sql) = rewritten {
+        Ok((sql, true))
+    } else {
+        Ok((statement.to_string(), false))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WriteTarget {
+    State,
+    StateAll,
+    StateByVersion,
+    StateVtable,
+    Other,
+}
+
+fn classify_write_target(name: &ObjectName) -> WriteTarget {
+    let Some(last) = name.0.last() else {
+        return WriteTarget::Other;
+    };
+    let value = last.value.as_str();
+    if value.eq_ignore_ascii_case(STATE_VIEW) {
+        return WriteTarget::State;
+    }
+    if value.eq_ignore_ascii_case(STATE_ALL_VIEW) {
+        return WriteTarget::StateAll;
+    }
+    if value.eq_ignore_ascii_case(STATE_BY_VERSION) {
+        return WriteTarget::StateByVersion;
+    }
+    if value.eq_ignore_ascii_case(INTERNAL_STATE_VTABLE) {
+        return WriteTarget::StateVtable;
+    }
+    WriteTarget::Other
+}
+
+fn resolve_physical_target(target: WriteTarget) -> Option<&'static str> {
+    match target {
+        WriteTarget::State | WriteTarget::StateAll | WriteTarget::StateByVersion => {
+            Some(STATE_BY_VERSION)
+        }
+        WriteTarget::StateVtable => Some(INTERNAL_STATE_VTABLE),
+        WriteTarget::Other => None,
+    }
+}
+
+fn rewrite_insert_for_write_rewrite(insert: &Insert) -> Result<Option<String>, EngineError> {
+    if insert.on.is_some()
+        || insert.returning.is_some()
+        || insert.partitioned.is_some()
+        || !insert.after_columns.is_empty()
+        || insert.table_alias.is_some()
+    {
+        return Ok(None);
+    }
+
+    let target_kind = classify_write_target(&insert.table_name);
+    let Some(target_table) = resolve_physical_target(target_kind) else {
+        return Ok(None);
+    };
+
+    let Some(source) = &insert.source else {
+        return Ok(None);
+    };
+
+    let SetExpr::Values(values) = &*source.body else {
+        return Ok(None);
+    };
+
+    if insert.columns.is_empty() {
+        return Ok(None);
+    }
+
+    let mut materialized_columns: Vec<String> = insert
+        .columns
+        .iter()
+        .map(|column| column.value.clone())
+        .collect();
+    let needs_active_version = target_kind == WriteTarget::State
+        && !materialized_columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case("version_id"));
+    if needs_active_version {
+        materialized_columns.push("version_id".to_owned());
+    }
+
+    let mut rendered_rows: Vec<String> = Vec::with_capacity(values.rows.len());
+    for row in &values.rows {
+        if row.len() != insert.columns.len() {
+            return Err(EngineError::protocol_mismatch(
+                "insert row shape does not match declared columns",
+            ));
+        }
+
+        let mut rendered_exprs: Vec<String> = row.iter().map(ToString::to_string).collect();
+        if needs_active_version {
+            rendered_exprs.push("(SELECT version_id FROM active_version)".to_owned());
+        }
+        rendered_rows.push(format!("({})", rendered_exprs.join(", ")));
+    }
+
+    let materialized_columns_sql = materialized_columns
+        .iter()
+        .map(|column| quote_ident(column))
+        .collect::<Vec<String>>()
+        .join(", ");
+
+    let sql = format!(
+        "WITH \"{MUTATION_ROW_CTE}\" ({materialized_columns_sql}) AS (VALUES {}) \
+         INSERT INTO {target_table} ({materialized_columns_sql}) \
+         SELECT {materialized_columns_sql} FROM \"{MUTATION_ROW_CTE}\"",
+        rendered_rows.join(", ")
+    );
+
+    Ok(Some(sql))
+}
+
+fn rewrite_update_for_write_rewrite(
+    table: &TableWithJoins,
+    assignments: &[sqlparser::ast::Assignment],
+    from: &Option<TableWithJoins>,
+    selection: &Option<sqlparser::ast::Expr>,
+    returning: &Option<Vec<sqlparser::ast::SelectItem>>,
+) -> Option<String> {
+    if table.joins.len() > 0 || from.is_some() || returning.is_some() {
+        return None;
+    }
+    let TableFactor::Table {
+        name, alias, args, ..
+    } = &table.relation
+    else {
+        return None;
+    };
+
+    if alias.is_some() || args.is_some() {
+        return None;
+    }
+
+    let target_kind = classify_write_target(name);
+    let target_table = resolve_physical_target(target_kind)?;
+
+    let predicate = combine_write_predicate(selection, target_kind);
+    let assignments_sql = assignments
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>()
+        .join(", ");
+
+    let key_columns_sql = STATE_MUTATION_KEY_COLUMNS.join(", ");
+    let where_clause = match predicate {
+        Some(predicate_sql) => format!(" WHERE {predicate_sql}"),
+        None => String::new(),
+    };
+
+    Some(format!(
+        "WITH \"{MUTATION_ROW_CTE}\" AS (\
+            SELECT {key_columns_sql} \
+            FROM {target_table}{where_clause} \
+            ORDER BY {key_columns_sql}\
+        ) \
+        UPDATE {target_table} \
+        SET {assignments_sql} \
+        WHERE ({key_columns_sql}) IN (\
+            SELECT {key_columns_sql} FROM \"{MUTATION_ROW_CTE}\"\
+        )"
+    ))
+}
+
+fn rewrite_delete_for_write_rewrite(delete: &Delete) -> Option<String> {
+    if !delete.tables.is_empty()
+        || delete.using.is_some()
+        || delete.returning.is_some()
+        || !delete.order_by.is_empty()
+        || delete.limit.is_some()
+    {
+        return None;
+    }
+
+    let tables = match &delete.from {
+        FromTable::WithFromKeyword(value) => value,
+        FromTable::WithoutKeyword(value) => value,
+    };
+    if tables.len() != 1 {
+        return None;
+    }
+
+    let table_with_joins = tables.first()?;
+    if !table_with_joins.joins.is_empty() {
+        return None;
+    }
+
+    let TableFactor::Table {
+        name, alias, args, ..
+    } = &table_with_joins.relation
+    else {
+        return None;
+    };
+    if alias.is_some() || args.is_some() {
+        return None;
+    }
+
+    let target_kind = classify_write_target(name);
+    let target_table = resolve_physical_target(target_kind)?;
+    let predicate = combine_write_predicate(&delete.selection, target_kind);
+    let key_columns_sql = STATE_MUTATION_KEY_COLUMNS.join(", ");
+    let where_clause = match predicate {
+        Some(predicate_sql) => format!(" WHERE {predicate_sql}"),
+        None => String::new(),
+    };
+
+    Some(format!(
+        "WITH \"{MUTATION_ROW_CTE}\" AS (\
+            SELECT {key_columns_sql} \
+            FROM {target_table}{where_clause} \
+            ORDER BY {key_columns_sql}\
+        ) \
+        DELETE FROM {target_table} \
+        WHERE ({key_columns_sql}) IN (\
+            SELECT {key_columns_sql} FROM \"{MUTATION_ROW_CTE}\"\
+        )"
+    ))
+}
+
+fn combine_write_predicate(
+    selection: &Option<sqlparser::ast::Expr>,
+    target: WriteTarget,
+) -> Option<String> {
+    let active_version_filter = "version_id IN (SELECT version_id FROM active_version)";
+
+    let selection_sql = selection.as_ref().map(ToString::to_string);
+
+    if target == WriteTarget::State {
+        return match selection_sql {
+            Some(sql) => Some(format!("({sql}) AND ({active_version_filter})")),
+            None => Some(active_version_filter.to_owned()),
+        };
+    }
+
+    selection_sql
+}
+
+fn quote_ident(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
 fn execute_plugin_change_detection(
@@ -520,6 +1158,42 @@ fn execute_plugin_change_detection(
     Ok(all_changes)
 }
 
+fn should_run_plugin_change_detection(statement_kind: &str, sql: &str, params: &[Value]) -> bool {
+    if statement_kind != RUST_KIND_WRITE_REWRITE && statement_kind != RUST_KIND_VALIDATION {
+        return false;
+    }
+
+    let lowered = sql.to_lowercase();
+    if lowered.contains("insert into file")
+        || lowered.contains("update file")
+        || lowered.contains("delete from file")
+    {
+        return true;
+    }
+
+    let mutates_state = lowered.contains("insert into state")
+        || lowered.contains("insert into state_by_version")
+        || lowered.contains("insert into lix_internal_state_vtable")
+        || lowered.contains("update state")
+        || lowered.contains("update state_by_version")
+        || lowered.contains("update lix_internal_state_vtable")
+        || lowered.contains("delete from state")
+        || lowered.contains("delete from state_by_version")
+        || lowered.contains("delete from lix_internal_state_vtable");
+    if !mutates_state {
+        return false;
+    }
+
+    if lowered.contains("lix_file") {
+        return true;
+    }
+
+    params.iter().any(|value| match value {
+        Value::String(text) => text == "lix_file",
+        _ => false,
+    })
+}
+
 fn map_host_error(error: EngineError, default_code: &'static str) -> EngineError {
     if error.code == LIX_RUST_SQLITE_EXECUTION
         || error.code == LIX_RUST_DETECT_CHANGES
@@ -539,16 +1213,15 @@ fn map_host_error(error: EngineError, default_code: &'static str) -> EngineError
 mod tests {
     use std::cell::RefCell;
 
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::{
         execute_with_host, plan_execute, rewrite_sql_for_execution, route_statement_kind,
         EngineError, ExecuteRequest, HostCallbacks, HostDetectChangesRequest,
         HostDetectChangesResponse, HostExecuteRequest, HostExecuteResponse, PluginChangeRequest,
-        LIX_RUST_DETECT_CHANGES,
-        LIX_RUST_REWRITE_VALIDATION, LIX_RUST_SQLITE_EXECUTION, RUST_KIND_PASSTHROUGH,
-        RUST_KIND_READ_REWRITE, RUST_KIND_VALIDATION, RUST_KIND_WRITE_REWRITE,
-        RUST_ROWS_AFFECTED_ROWS_LENGTH, RUST_ROWS_AFFECTED_SQLITE_CHANGES,
+        LIX_RUST_DETECT_CHANGES, LIX_RUST_REWRITE_VALIDATION, LIX_RUST_SQLITE_EXECUTION,
+        RUST_KIND_PASSTHROUGH, RUST_KIND_READ_REWRITE, RUST_KIND_VALIDATION,
+        RUST_KIND_WRITE_REWRITE, RUST_ROWS_AFFECTED_ROWS_LENGTH, RUST_ROWS_AFFECTED_SQLITE_CHANGES,
     };
 
     #[derive(Default)]
@@ -559,9 +1232,56 @@ mod tests {
         detect_response: RefCell<Option<Result<HostDetectChangesResponse, EngineError>>>,
     }
 
+    struct ValidationHost {
+        execute_calls: RefCell<Vec<HostExecuteRequest>>,
+        schema_value: Value,
+    }
+
+    impl HostCallbacks for ValidationHost {
+        fn execute(&self, request: HostExecuteRequest) -> Result<HostExecuteResponse, EngineError> {
+            self.execute_calls.borrow_mut().push(request.clone());
+            if request.sql.to_lowercase().contains("from stored_schema") {
+                return Ok(HostExecuteResponse {
+                    rows: vec![json!({ "value": self.schema_value.clone() })],
+                    rows_affected: 1,
+                    last_insert_row_id: None,
+                });
+            }
+            Ok(HostExecuteResponse {
+                rows: vec![],
+                rows_affected: 1,
+                last_insert_row_id: None,
+            })
+        }
+
+        fn detect_changes(
+            &self,
+            _request: HostDetectChangesRequest,
+        ) -> Result<HostDetectChangesResponse, EngineError> {
+            Ok(HostDetectChangesResponse {
+                changes: Vec::new(),
+            })
+        }
+    }
+
     impl HostCallbacks for TestHost {
         fn execute(&self, request: HostExecuteRequest) -> Result<HostExecuteResponse, EngineError> {
+            let is_schema_query = request.sql.to_lowercase().contains("from stored_schema");
             self.execute_calls.borrow_mut().push(request);
+            if is_schema_query {
+                return Ok(HostExecuteResponse {
+                    rows: vec![json!({
+                        "value": {
+                            "type": "object",
+                            "x-lix-key": "mock_schema",
+                            "x-lix-version": "1.0",
+                            "additionalProperties": true
+                        }
+                    })],
+                    rows_affected: 1,
+                    last_insert_row_id: None,
+                });
+            }
             self.execute_response
                 .borrow_mut()
                 .take()
@@ -683,6 +1403,48 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_state_insert_with_materialized_rows() {
+        let sql = "insert into state (entity_id, schema_key, file_id, plugin_key, snapshot_content, schema_version, metadata, untracked) values ('e1', 'k', 'f1', 'json', json('{}'), '1', json('{}'), 0), ('e2', 'k', 'f2', 'json', json('{}'), '1', json('{}'), 1)";
+        let rewritten =
+            rewrite_sql_for_execution(sql, RUST_KIND_VALIDATION).expect("rewrite should work");
+        let normalized = rewritten.to_lowercase();
+        assert!(normalized.contains("with \"__lix_mutation_rows\""));
+        assert!(normalized.contains("insert into state_by_version"));
+        assert!(normalized.contains("select version_id from active_version"));
+        assert!(normalized.contains("select \"entity_id\""));
+    }
+
+    #[test]
+    fn rewrites_state_update_to_deterministic_cte() {
+        let sql = "update state set snapshot_content = json('{\"value\":2}'), untracked = 1 where schema_key = 'lix_key_value'";
+        let rewritten =
+            rewrite_sql_for_execution(sql, RUST_KIND_VALIDATION).expect("rewrite should work");
+        let normalized = rewritten.to_lowercase();
+        assert!(normalized.contains("with \"__lix_mutation_rows\" as"));
+        assert!(normalized.contains("from state_by_version where (schema_key = 'lix_key_value') and (version_id in (select version_id from active_version))"));
+        assert!(normalized.contains("order by entity_id, schema_key, file_id, version_id"));
+        assert!(normalized.contains(
+            "update state_by_version set snapshot_content = json('{\"value\":2}'), untracked = 1"
+        ));
+    }
+
+    #[test]
+    fn rewrites_state_by_version_delete_to_deterministic_cte() {
+        let sql =
+            "delete from state_by_version where version_id = 'global' and schema_key = 'lix_file'";
+        let rewritten =
+            rewrite_sql_for_execution(sql, RUST_KIND_WRITE_REWRITE).expect("rewrite should work");
+        let normalized = rewritten.to_lowercase();
+        assert!(normalized.contains("with \"__lix_mutation_rows\" as"));
+        assert!(normalized.contains(
+            "from state_by_version where version_id = 'global' and schema_key = 'lix_file'"
+        ));
+        assert!(normalized.contains("order by entity_id, schema_key, file_id, version_id"));
+        assert!(normalized.contains("delete from state_by_version"));
+        assert!(normalized.contains("where (entity_id, schema_key, file_id, version_id) in"));
+    }
+
+    #[test]
     fn executes_read_rewrite_with_rows_length_policy() {
         let host = TestHost {
             execute_response: RefCell::new(Some(Ok(HostExecuteResponse {
@@ -764,9 +1526,6 @@ mod tests {
                 rows_affected: 3,
                 last_insert_row_id: None,
             }))),
-            detect_response: RefCell::new(Some(Ok(HostDetectChangesResponse {
-                changes: vec![json!({ "type": "state_commit" })],
-            }))),
             ..Default::default()
         };
 
@@ -788,10 +1547,51 @@ mod tests {
 
         assert_eq!(result.statement_kind, RUST_KIND_VALIDATION);
         assert_eq!(result.rows_affected, 3);
+        assert!(result.plugin_changes.is_empty());
+        assert!(host.detect_calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn executes_validation_detect_changes_for_lix_file_mutations() {
+        let host = TestHost {
+            execute_response: RefCell::new(Some(Ok(HostExecuteResponse {
+                rows: vec![],
+                rows_affected: 1,
+                last_insert_row_id: None,
+            }))),
+            detect_response: RefCell::new(Some(Ok(HostDetectChangesResponse {
+                changes: vec![json!({ "type": "file_state_change" })],
+            }))),
+            ..Default::default()
+        };
+
+        let sql = "insert into state (entity_id, schema_key, file_id, plugin_key, snapshot_content, schema_version, metadata, untracked) values (?, ?, ?, ?, json('{}'), ?, json('{}'), 0)";
+        let result = execute_with_host(
+            &host,
+            ExecuteRequest {
+                request_id: "req-validation-file".to_owned(),
+                sql: sql.to_owned(),
+                params: vec![
+                    json!("e"),
+                    json!("lix_file"),
+                    json!("f"),
+                    json!("json"),
+                    json!("1"),
+                ],
+                plugin_change_requests: vec![PluginChangeRequest {
+                    plugin_key: "json".to_owned(),
+                    before: vec![],
+                    after: vec![],
+                }],
+            },
+        )
+        .expect("validation execution should succeed");
+
         assert_eq!(
             result.plugin_changes,
-            vec![json!({ "type": "state_commit" })]
+            vec![json!({ "type": "file_state_change" })]
         );
+        assert_eq!(host.detect_calls.borrow().len(), 1);
     }
 
     #[test]
@@ -898,6 +1698,72 @@ mod tests {
             },
         )
         .expect_err("invalid validation target should fail");
+
+        assert_eq!(error.code, LIX_RUST_REWRITE_VALIDATION);
+    }
+
+    #[test]
+    fn returns_validation_error_for_snapshot_schema_violation() {
+        let schema = json!({
+            "type": "object",
+            "x-lix-key": "mock_schema",
+            "x-lix-version": "1.0",
+            "properties": {
+                "name": { "type": "string" }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+        });
+        let host = ValidationHost {
+            execute_calls: RefCell::new(Vec::new()),
+            schema_value: schema,
+        };
+
+        let sql = "insert into state (entity_id, schema_key, file_id, plugin_key, snapshot_content, schema_version, metadata, untracked) values ('e', 'mock_schema', 'f', 'json', json('{\"count\":1}'), '1.0', json('{}'), 0)";
+        let error = execute_with_host(
+            &host,
+            ExecuteRequest {
+                request_id: "req-schema-invalid".to_owned(),
+                sql: sql.to_owned(),
+                params: vec![],
+                plugin_change_requests: vec![],
+            },
+        )
+        .expect_err("invalid snapshot should fail validation");
+
+        assert_eq!(error.code, LIX_RUST_REWRITE_VALIDATION);
+    }
+
+    #[test]
+    fn returns_validation_error_for_invalid_cel_in_schema() {
+        let schema = json!({
+            "type": "object",
+            "x-lix-key": "mock_schema",
+            "x-lix-version": "1.0",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "x-lix-default": "1 +"
+                }
+            },
+            "additionalProperties": false
+        });
+        let host = ValidationHost {
+            execute_calls: RefCell::new(Vec::new()),
+            schema_value: schema,
+        };
+
+        let sql = "insert into state (entity_id, schema_key, file_id, plugin_key, snapshot_content, schema_version, metadata, untracked) values ('e', 'mock_schema', 'f', 'json', json('{\"name\":\"ok\"}'), '1.0', json('{}'), 0)";
+        let error = execute_with_host(
+            &host,
+            ExecuteRequest {
+                request_id: "req-cel-invalid".to_owned(),
+                sql: sql.to_owned(),
+                params: vec![],
+                plugin_change_requests: vec![],
+            },
+        )
+        .expect_err("invalid CEL expression should fail validation");
 
         assert_eq!(error.code, LIX_RUST_REWRITE_VALIDATION);
     }

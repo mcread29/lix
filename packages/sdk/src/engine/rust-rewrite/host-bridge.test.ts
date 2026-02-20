@@ -47,7 +47,7 @@ describe("rust host bridge", () => {
 			{ preprocessMode: "full" },
 			{ preprocessMode: "none" },
 			{ preprocessMode: "full" },
-			{ preprocessMode: "full" },
+			{ preprocessMode: "none" },
 		]);
 	});
 
@@ -155,7 +155,7 @@ describe("rust host bridge", () => {
 			{ statementKind: "read_rewrite", preprocessMode: "none" },
 			{ statementKind: "passthrough", preprocessMode: "none" },
 			{ statementKind: "write_rewrite", preprocessMode: "full" },
-			{ statementKind: "validation", preprocessMode: "full" },
+			{ statementKind: "validation", preprocessMode: "none" },
 		]);
 		expect(detectCalls).toEqual([]);
 	});

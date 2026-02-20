@@ -4,6 +4,7 @@ import {
 	executeWithHostInRust,
 	loadRustEngineBinding,
 	planExecuteInRust,
+	rewriteSqlForExecutionInRust,
 	routeStatementKindInRust,
 	resolveRustEngineRouterBinaryPath,
 	resolveRustEngineBindingTarget,
@@ -148,6 +149,7 @@ describe("executeWithHostInRust", () => {
 	});
 
 	test("dispatches validation with sqlite_changes policy", () => {
+		const executeCalls: Array<Record<string, unknown>> = [];
 		const result = executeWithHostInRust({
 			request: {
 				requestId: "validation-1",
@@ -156,16 +158,21 @@ describe("executeWithHostInRust", () => {
 				pluginChangeRequests: [],
 			},
 			host: {
-				execute: () => ({
-					rows: [{ accepted: true }],
-					rowsAffected: 3,
-				}),
+				execute: (request) => {
+					executeCalls.push(request as Record<string, unknown>);
+					return {
+						rows: [{ accepted: true }],
+						rowsAffected: 3,
+					};
+				},
 				detectChanges: () => ({ changes: [] }),
 			},
 		});
 
 		expect(result.statementKind).toBe("validation");
 		expect(result.rowsAffected).toBe(3);
+		expect(executeCalls[0]?.sql).toContain("WITH \"__lix_mutation_rows\"");
+		expect(executeCalls[0]?.sql).toContain("INSERT INTO state_by_version");
 	});
 
 	test("dispatches passthrough without detectChanges", () => {
@@ -198,5 +205,20 @@ describe("executeWithHostInRust", () => {
 		expect(result.statementKind).toBe("passthrough");
 		expect(result.rowsAffected).toBe(1);
 		expect(detectCalled).toBe(false);
+	});
+});
+
+describe("rewriteSqlForExecutionInRust", () => {
+	test("rewrites state updates into deterministic mutation SQL", () => {
+		const rewritten = rewriteSqlForExecutionInRust(
+			"update state set untracked = 1 where schema_key = 'lix_key_value'",
+			"validation"
+		);
+		const normalized = rewritten.toLowerCase();
+		expect(normalized).toContain("with \"__lix_mutation_rows\" as");
+		expect(normalized).toContain("update state_by_version set untracked = 1");
+		expect(normalized).toContain(
+			"order by entity_id, schema_key, file_id, version_id"
+		);
 	});
 });

@@ -51,19 +51,29 @@ export function createRustHostBridge(args: {
 	executeWithHost?: RustExecuteWithHost;
 }): RustHostBridge {
 	const engine = args.engine;
-	const toRustHostPreprocessMode = (
-		statementKind: RustExecuteRequest["statementKind"]
-	): "full" | "none" => {
+	const toRustHostPreprocessMode = (request: {
+		sql: string;
+		statementKind: RustExecuteRequest["statementKind"];
+	}): "full" | "none" => {
+		const { statementKind, sql } = request;
 		if (statementKind === "read_rewrite" || statementKind === "passthrough") {
 			return "none";
 		}
+
+		if (isRustNativeStateMutationSql(sql)) {
+			return "none";
+		}
+
 		return toExecutePreprocessMode(statementKind);
 	};
 	const hostExecute = (request: RustExecuteRequest) => {
 		const result = engine.executeSync({
 			sql: request.sql,
 			parameters: request.params,
-			preprocessMode: toRustHostPreprocessMode(request.statementKind),
+			preprocessMode: toRustHostPreprocessMode({
+				sql: request.sql,
+				statementKind: request.statementKind,
+			}),
 		});
 
 		return {
@@ -121,6 +131,12 @@ export function createRustHostBridge(args: {
 			return executeDetectChanges({ engine, request });
 		},
 	};
+}
+
+function isRustNativeStateMutationSql(sql: string): boolean {
+	return /\b(?:insert\s+into|update|delete\s+from)\s+[`"]?(?:state|state_all|state_by_version|lix_internal_state_vtable)[`"]?\b/i.test(
+		sql
+	);
 }
 
 function executeDetectChanges(args: {
