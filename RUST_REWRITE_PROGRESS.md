@@ -2,9 +2,9 @@
 
 Tracking against `RUST_REWRITE_PLAN.md`.
 
-- Last updated: `2026-02-19T18:33:20Z`
+- Last updated: `2026-02-19T18:37:30Z`
 - Phase: `Phase 1`
-- Overall status: `in_progress` (Phase 1 M1.2 host bridge)
+- Overall status: `in_progress` (Phase 1 M1.2 completed; next M1.3)
 
 ## Milestones
 
@@ -71,12 +71,12 @@ Tracking against `RUST_REWRITE_PLAN.md`.
 
 ### Phase 1 - M1.2 Host Bridge Abstraction
 
-- Status: `in_progress`
+- Status: `completed`
 - Scope:
   - Introduce host bridge abstraction for rust callback surface.
   - Integrate `detectChanges` callback through plugin lookup + `querySync` bridge.
   - Preserve deterministic JS-visible error code mapping at adapter boundary.
-- Current implementation chunks:
+- Delivered artifacts:
   - `packages/sdk/src/engine/rust-rewrite/host-bridge.ts`
   - `packages/sdk/src/engine/rust-rewrite/host-bridge.test.ts`
   - `packages/sdk/src/engine/boot.ts`
@@ -177,16 +177,22 @@ Tracking against `RUST_REWRITE_PLAN.md`.
 - `2026-02-19T18:32:58Z` - M1.2 host bridge tests passed (`16/16`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/host-bridge.test.ts src/engine/boot.test.ts src/engine/rust-rewrite/callback-adapter.test.ts`.
 - `2026-02-19T18:33:05Z` - M1.2 SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
 - `2026-02-19T18:33:05Z` - M1.2 SDK lint passed: `pnpm --filter @lix-js/sdk lint`.
+- `2026-02-19T18:34:10Z` - M1.2 implementation checkpoint event applied via MCP (`evt_20260219_phase1_m12_checkpoint_host_bridge`).
+- `2026-02-19T18:35:38Z` - Final M1.2 focused verification tests passed (`29/29`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/host-bridge.test.ts src/engine/boot.test.ts src/engine/rust-rewrite/callback-adapter.test.ts src/engine/rust-rewrite/callback-contract.test.ts src/engine/preprocessor/create-preprocessor.test.ts`.
+- `2026-02-19T18:35:57Z` - Final M1.2 SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
+- `2026-02-19T18:35:57Z` - Final M1.2 SDK lint passed: `pnpm --filter @lix-js/sdk lint`.
+- `2026-02-19T18:36:10Z` - M1.2 completion event applied via MCP (`evt_20260219_phase1_m12_complete`).
 
 ## Next Steps
 
 ```md
 <context>
-Phase 1 M1.2 host bridge abstraction is in progress with planning/readiness complete and initial verified implementation chunks landed.
+Phase 1 M1.2 host bridge abstraction is complete and verified.
 Keep RFC 002 constraints unchanged: SQLite-only initial scope and SDK ownership of SQLite lifecycle.
 </context>
 <task>
-Finish M1.2 by completing host-bridge callback behavior coverage, finalize verification across targeted rust callback surfaces, and close the milestone with completion evidence.
+Implement the next Phase 1 milestone (M1.3 read-path execution): drive rust_active read-path execution against callback surface behavior gates while preserving current SQL semantics and fallback safety.
+Add focused tests proving read-path behavior parity and deterministic boundary error handling for rust_active mode.
 Update this progress document continuously as each verified sub-scope completes.
 </task>
 <constraints>
@@ -195,6 +201,6 @@ Commit frequently in small verified increments (avoid large batch commits).
 When the task is done, update `Next Steps` in this file to the next actionable milestone handoff.
 </constraints>
 <format>
-Updated SDK host-bridge implementation and tests, plus progress log entries with verification evidence and next-step handoff.
+Updated SDK read-path execution implementation and tests, plus progress log entries with verification evidence and next-step handoff.
 </format>
 ```
