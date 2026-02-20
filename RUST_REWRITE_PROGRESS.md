@@ -2,9 +2,9 @@
 
 Tracking against `RUST_REWRITE_PLAN.md`.
 
-- Last updated: `2026-02-19T18:23:50Z`
+- Last updated: `2026-02-19T18:25:40Z`
 - Phase: `Phase 1`
-- Overall status: `in_progress` (Phase 1 M1.1 parser/router)
+- Overall status: `in_progress` (Phase 1 M1.1 completed; next M1.2)
 
 ## Milestones
 
@@ -58,12 +58,12 @@ Tracking against `RUST_REWRITE_PLAN.md`.
 
 ### Phase 1 - M1.1 Parser/Router
 
-- Status: `in_progress`
+- Status: `completed`
 - Scope:
   - Route rust-active callback `execute` requests deterministically to `read_rewrite` or `passthrough` using SQL parsing.
   - Keep read-rewrite compatible with current preprocessor behavior (`preprocessMode: full`).
   - Keep passthrough statements unmodified (`preprocessMode: none`).
-- Current implementation chunks:
+- Delivered artifacts:
   - `packages/sdk/src/engine/rust-rewrite/callback-adapter.ts` (statement classification + preprocess-mode mapping)
   - `packages/sdk/src/engine/rust-rewrite/callback-adapter.test.ts` (deterministic routing tests)
   - `packages/sdk/src/engine/boot.ts` (router wiring in rust_active execute path)
@@ -140,17 +140,22 @@ Tracking against `RUST_REWRITE_PLAN.md`.
 - `2026-02-19T18:22:42Z` - M1.1 implementation tests passed (`12/12`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/callback-adapter.test.ts src/engine/boot.test.ts`.
 - `2026-02-19T18:22:45Z` - M1.1 implementation SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
 - `2026-02-19T18:22:45Z` - M1.1 implementation SDK lint passed: `pnpm --filter @lix-js/sdk lint`.
+- `2026-02-19T18:24:10Z` - M1.1 implementation checkpoint event applied via MCP (`evt_20260219_phase1_m11_checkpoint_router_wired`).
+- `2026-02-19T18:24:05Z` - Final M1.1 focused verification tests passed (`25/25`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/boot.test.ts src/engine/rust-rewrite/callback-adapter.test.ts src/engine/rust-rewrite/callback-contract.test.ts src/engine/preprocessor/create-preprocessor.test.ts`.
+- `2026-02-19T18:24:30Z` - Final M1.1 SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
+- `2026-02-19T18:24:30Z` - Final M1.1 SDK lint passed: `pnpm --filter @lix-js/sdk lint`.
+- `2026-02-19T18:25:20Z` - M1.1 completion event applied via MCP (`evt_20260219_phase1_m11_complete`).
 
 ## Next Steps
 
 ```md
 <context>
-Phase 1 adapter integration is complete and verified.
+Phase 1 M1.1 parser/router is complete and verified.
 Keep RFC 002 constraints unchanged: SQLite-only initial scope and SDK ownership of SQLite lifecycle.
 </context>
 <task>
-Implement the next Phase 1 milestone (M1.1 parser/router): route read-rewrite and passthrough statements through the rust-active callback surface while preserving current SQL semantics.
-Add focused tests proving parser/router decisions are deterministic and compatible with existing preprocessor expectations.
+Implement the next Phase 1 milestone (M1.2 host bridge abstraction): define the rust callback host-bridge interface used by rust_active runtime and integrate the `detectChanges` callback with deterministic JS-visible error-code propagation.
+Add focused tests for host-bridge request/response normalization and callback error-mapping behavior.
 Update this progress document continuously as each verified sub-scope completes.
 </task>
 <constraints>
