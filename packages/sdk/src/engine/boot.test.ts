@@ -5,6 +5,12 @@ import {
 } from "../database/sqlite/index.js";
 import { newLixFile } from "../lix/new-lix.js";
 import { boot } from "./boot.js";
+import {
+	deserializeExecuteResponse,
+	LIX_RUST_CALLBACK_DETECT_CHANGES,
+	LIX_RUST_CALLBACK_EXECUTE,
+	serializeDetectChangesRequest,
+} from "./rust-rewrite/callback-adapter.js";
 
 test("boot installs engine and triggers plugin on file insert", async () => {
 	const sqlite = await createInMemoryDatabase({ readOnly: false });
@@ -85,4 +91,93 @@ test("execSync.rows returns a mapped object", async () => {
 	});
 
 	expect(result.rows).toEqual([{ answer: 42, label: "meaning" }]);
+	sqlite.close();
+});
+
+test("legacy mode does not expose rust callback routes", async () => {
+	const sqlite = await createInMemoryDatabase({ readOnly: false });
+	const blob = await newLixFile();
+	const buf = new Uint8Array(await blob.arrayBuffer());
+	importDatabase({ db: sqlite, content: buf });
+
+	const engine = await boot({
+		sqlite,
+		emit: () => {},
+		args: {
+			rustRewrite: { mode: "legacy" },
+		},
+	});
+
+	try {
+		engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+			requestId: "legacy-1",
+			sql: "select 1 as value",
+			paramsJson: "[]",
+			statementKind: "read_rewrite",
+		});
+		expect.fail("expected legacy call to throw");
+	} catch (error) {
+		expect(error).toMatchObject({ code: "LIX_CALL_UNKNOWN" });
+	}
+
+	sqlite.close();
+});
+
+test("rust_active mode exposes rust execute callback route", async () => {
+	const sqlite = await createInMemoryDatabase({ readOnly: false });
+	const blob = await newLixFile();
+	const buf = new Uint8Array(await blob.arrayBuffer());
+	importDatabase({ db: sqlite, content: buf });
+
+	const engine = await boot({
+		sqlite,
+		emit: () => {},
+		args: {
+			rustRewrite: { mode: "rust_active" },
+		},
+	});
+
+	const response = await engine.call(LIX_RUST_CALLBACK_EXECUTE, {
+		requestId: "active-1",
+		sql: "select 7 as value",
+		paramsJson: "[]",
+		statementKind: "read_rewrite",
+	});
+
+	const decoded = deserializeExecuteResponse(response as any);
+	expect(decoded.rows).toEqual([{ value: 7 }]);
+	expect(decoded.rowsAffected).toBe(1);
+
+	sqlite.close();
+});
+
+test("rust_active detectChanges route returns deterministic boundary code", async () => {
+	const sqlite = await createInMemoryDatabase({ readOnly: false });
+	const blob = await newLixFile();
+	const buf = new Uint8Array(await blob.arrayBuffer());
+	importDatabase({ db: sqlite, content: buf });
+
+	const engine = await boot({
+		sqlite,
+		emit: () => {},
+		args: {
+			rustRewrite: { mode: "rust_active" },
+		},
+	});
+
+	const request = serializeDetectChangesRequest({
+		requestId: "active-detect-1",
+		pluginKey: "json",
+		before: new Uint8Array([1]),
+		after: new Uint8Array([2]),
+	});
+
+	try {
+		await engine.call(LIX_RUST_CALLBACK_DETECT_CHANGES, request);
+		expect.fail("expected detect changes call to throw");
+	} catch (error) {
+		expect(error).toMatchObject({ code: "LIX_RUST_DETECT_CHANGES" });
+	}
+
+	sqlite.close();
 });

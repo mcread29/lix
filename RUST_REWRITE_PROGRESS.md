@@ -1,10 +1,10 @@
 # Lix Rust Rewrite Progress
 
-Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
+Tracking against `RUST_REWRITE_PLAN.md`.
 
-- Last updated: `2026-02-19T17:59:05Z`
-- Phase: `Phase 0`
-- Overall status: `completed` (Phase 0)
+- Last updated: `2026-02-19T18:33:45Z`
+- Phase: `Phase 1`
+- Overall status: `in_progress` (Phase 1)
 
 ## Milestones
 
@@ -43,6 +43,19 @@ Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
   - `packages/sdk/src/lix/open-lix.test.ts`
   - `rfcs/002-rewrite-in-rust/phase-0/m0.3-rollout-modes.md`
 
+### Phase 1 - Adapter Integration (Current)
+
+- Status: `in_progress`
+- Scope:
+  - Rust callback adapter wiring behind `rust_active` in SDK bootstrap.
+  - Adapter-level serialization/deserialization tests.
+  - Deterministic JS-visible error `code` propagation verification.
+- Delivered chunks:
+  - `packages/sdk/src/engine/rust-rewrite/callback-adapter.ts`
+  - `packages/sdk/src/engine/rust-rewrite/callback-adapter.test.ts`
+  - `packages/sdk/src/engine/boot.ts`
+  - `packages/sdk/src/engine/boot.test.ts`
+
 ## Planning Phase (/feature-plan)
 
 - Context exploration completed from `RUST_REWRITE_PLAN.md`, `rfcs/002-rewrite-in-rust/index.md`, SDK entrypoints/tests, and MCP brain search.
@@ -53,6 +66,17 @@ Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
   - `pnpm --filter @lix-js/sdk exec vitest run src/lix/open-lix.test.ts` -> pass (`12/12`)
   - `pnpm --filter @lix-js/sdk exec tsc --noEmit` -> pass
 - Readiness outcome: `READY` for Phase 0 implementation.
+
+### Phase 1 - Adapter Integration Planning
+
+- Context exploration completed from Phase 0 artifacts, RFC 002 constraints, SDK boot/environment wiring, and MCP brain search/graph.
+- Blocking decisions: none unresolved for Phase 1 scope.
+- Decision event logged:
+  - `brain://event/evt_20260219_phase1_planning_decisions`
+- Readiness checks (pre-implementation):
+  - `pnpm --filter @lix-js/sdk exec vitest run src/engine/boot.test.ts src/engine/rust-rewrite/callback-contract.test.ts src/lix/open-lix.test.ts` -> pass (`22/22`)
+  - `pnpm --filter @lix-js/sdk exec tsc --noEmit` -> pass
+- Readiness outcome: `READY` for Phase 1 implementation.
 
 ## Verification Log
 
@@ -75,9 +99,31 @@ Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
 - `2026-02-19T17:58:08Z` - Full `pnpm --filter @lix-js/sdk test` blocked by `playwright install --with-deps` requiring sudo in this environment (non-code infra limitation).
 - `2026-02-19T17:58:47Z` - Consolidated Phase 0 verification passed: `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/callback-contract.test.ts src/lix/open-lix.test.ts` (`20/20`).
 - `2026-02-19T17:58:55Z` - Final Phase 0 SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
+- `2026-02-19T18:27:30Z` - Phase 1 planning decision event applied via MCP (`evt_20260219_phase1_planning_decisions`).
+- `2026-02-19T18:28:14Z` - Phase 1 readiness test bundle passed (`22/22`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/boot.test.ts src/engine/rust-rewrite/callback-contract.test.ts src/lix/open-lix.test.ts`.
+- `2026-02-19T18:28:27Z` - Phase 1 readiness SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
+- `2026-02-19T18:33:20Z` - Phase 1 implementation checkpoint event applied via MCP (`evt_20260219_phase1_checkpoint_adapter_wired`).
+- `2026-02-19T18:12:13Z` - Adapter and boot callback tests passed (`9/9`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/boot.test.ts src/engine/rust-rewrite/callback-adapter.test.ts`.
+- `2026-02-19T18:12:24Z` - SDK typecheck passed after adapter wiring: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
+- `2026-02-19T18:12:24Z` - SDK lint passed after adapter wiring: `pnpm --filter @lix-js/sdk lint`.
 
 ## Next Steps
 
-1. Start Phase 1 by implementing Rust callback adapter wiring behind `rust_active` in SDK environment bootstrap while preserving SQLite lifecycle ownership in SDK.
-2. Add side-by-side adapter-level tests for callback serialization/deserialization and deterministic error `code` propagation from Rust boundary to JS.
-3. Keep `legacy` as default and retain `rust_shadow` optional until Phase 1 verification gates pass.
+```md
+<context>
+Phase 0 is complete and verified. The next actionable milestone is Phase 1 adapter integration.
+Keep RFC 002 constraints unchanged: SQLite-only initial scope and SDK ownership of SQLite lifecycle.
+</context>
+<task>
+Implement Rust callback adapter wiring behind `rust_active` in SDK bootstrap, then add adapter-level tests for callback serialization/deserialization and deterministic JS-visible error `code` propagation.
+Update this progress document continuously as each verified sub-scope completes.
+</task>
+<constraints>
+Do not change default mode from `legacy`. Keep `rust_shadow` optional. Do not implement Phase 2+ work.
+Commit frequently in small verified increments (avoid large batch commits).
+When the task is done, update `Next Steps` in this file to the next actionable milestone handoff.
+</constraints>
+<format>
+Updated SDK adapter implementation and tests, plus progress log entries with verification evidence and next-step handoff.
+</format>
+```

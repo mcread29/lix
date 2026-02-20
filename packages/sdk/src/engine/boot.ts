@@ -17,6 +17,7 @@ import {
 import { registerBuiltinFunctions } from "./functions/register-builtins.js";
 import type { PreprocessorFn } from "./preprocessor/types.js";
 import { createPreprocessor } from "./preprocessor/create-preprocessor.js";
+import { registerRustCallbackAdapterFunctions } from "./rust-rewrite/callback-adapter.js";
 
 export type EngineEvent = {
 	type: "state_commit";
@@ -28,6 +29,7 @@ export type BootArgs = {
 	providePluginsRaw?: string[];
 	account?: Parameters<typeof openLix>[0]["account"];
 	keyValues?: Parameters<typeof openLix>[0]["keyValues"];
+	rustRewrite?: Parameters<typeof openLix>[0]["rustRewrite"];
 };
 
 export type BootEnv = {
@@ -271,6 +273,29 @@ export async function boot(env: BootEnv): Promise<LixEngine> {
 	}
 
 	registerBuiltinFunctions({ register: fnRegistry.register, engine });
+
+	if (env.args.rustRewrite?.mode === "rust_active") {
+		registerRustCallbackAdapterFunctions({
+			register: fnRegistry.register,
+			deps: {
+				execute: (request) => {
+					const result = engine.executeSync({
+						sql: request.sql,
+						parameters: request.params,
+					});
+					return {
+						rows: result.rows,
+						rowsAffected: result.rows.length,
+					};
+				},
+				detectChanges: (request) => {
+					throw new Error(
+						`detect changes callback is not yet wired for plugin ${request.pluginKey}`
+					);
+				},
+			},
+		});
+	}
 
 	if (deterministicBoot) {
 		setDeterministicBoot({ runtimeCacheRef, value: false });
