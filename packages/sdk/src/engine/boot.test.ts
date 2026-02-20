@@ -6,6 +6,7 @@ import {
 import { newLixFile } from "../lix/new-lix.js";
 import { boot } from "./boot.js";
 import {
+	deserializeDetectChangesResponse,
 	deserializeExecuteResponse,
 	LIX_RUST_CALLBACK_DETECT_CHANGES,
 	LIX_RUST_CALLBACK_EXECUTE,
@@ -206,6 +207,66 @@ test("rust_active detectChanges route returns deterministic boundary code", asyn
 	} catch (error) {
 		expect(error).toMatchObject({ code: "LIX_RUST_DETECT_CHANGES" });
 	}
+
+	sqlite.close();
+});
+
+test("rust_active detectChanges route bridges plugin callback response", async () => {
+	const sqlite = await createInMemoryDatabase({ readOnly: false });
+	const blob = await newLixFile();
+	const buf = new Uint8Array(await blob.arrayBuffer());
+	importDatabase({ db: sqlite, content: buf });
+
+	const pluginCode = `
+      export const plugin = {
+        key: 'json',
+        detectChanges: ({ before, after }) => {
+          const beforeValue = before?.data ? JSON.parse(new TextDecoder().decode(before.data)) : null
+          const afterValue = JSON.parse(new TextDecoder().decode(after.data))
+          if (beforeValue?.title === afterValue.title) return []
+          return [{
+            entity_id: 'entity-1',
+            schema: {
+              "x-lix-key": "test_item",
+              "x-lix-version": "1.0",
+              "x-lix-primary-key": ["/id"],
+              "type": "object",
+              "properties": { "id": {"type": "string"}, "title": {"type": "string"} },
+              "required": ["id", "title"],
+              "additionalProperties": false
+            },
+            snapshot_content: { id: 'entity-1', title: afterValue.title }
+          }]
+        }
+      }
+    `;
+
+	const engine = await boot({
+		sqlite,
+		emit: () => {},
+		args: {
+			rustRewrite: { mode: "rust_active" },
+			providePluginsRaw: [pluginCode],
+		},
+	});
+
+	const before = new TextEncoder().encode(JSON.stringify({ title: "Before" }));
+	const after = new TextEncoder().encode(JSON.stringify({ title: "After" }));
+	const request = serializeDetectChangesRequest({
+		requestId: "active-detect-2",
+		pluginKey: "json",
+		before,
+		after,
+	});
+
+	const response = await engine.call(LIX_RUST_CALLBACK_DETECT_CHANGES, request);
+	const decoded = deserializeDetectChangesResponse(response as any);
+
+	expect(decoded.changes).toHaveLength(1);
+	expect(decoded.changes[0]).toMatchObject({
+		entity_id: "entity-1",
+		snapshot_content: { title: "After" },
+	});
 
 	sqlite.close();
 });

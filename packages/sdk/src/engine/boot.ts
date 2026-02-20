@@ -19,8 +19,8 @@ import type { PreprocessorFn } from "./preprocessor/types.js";
 import { createPreprocessor } from "./preprocessor/create-preprocessor.js";
 import {
 	registerRustCallbackAdapterFunctions,
-	toExecutePreprocessMode,
 } from "./rust-rewrite/callback-adapter.js";
+import { createRustHostBridge } from "./rust-rewrite/host-bridge.js";
 
 export type EngineEvent = {
 	type: "state_commit";
@@ -278,26 +278,10 @@ export async function boot(env: BootEnv): Promise<LixEngine> {
 	registerBuiltinFunctions({ register: fnRegistry.register, engine });
 
 	if (env.args.rustRewrite?.mode === "rust_active") {
+		const rustHostBridge = createRustHostBridge({ engine });
 		registerRustCallbackAdapterFunctions({
 			register: fnRegistry.register,
-			deps: {
-				execute: (request) => {
-					const result = engine.executeSync({
-						sql: request.sql,
-						parameters: request.params,
-						preprocessMode: toExecutePreprocessMode(request.statementKind),
-					});
-					return {
-						rows: result.rows,
-						rowsAffected: result.rows.length,
-					};
-				},
-				detectChanges: (request) => {
-					throw new Error(
-						`detect changes callback is not yet wired for plugin ${request.pluginKey}`
-					);
-				},
-			},
+			deps: rustHostBridge,
 		});
 	}
 
