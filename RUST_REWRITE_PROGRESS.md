@@ -2,9 +2,9 @@
 
 Tracking against `RUST_REWRITE_PLAN.md`.
 
-- Last updated: `2026-02-19T18:33:45Z`
+- Last updated: `2026-02-19T18:14:35Z`
 - Phase: `Phase 1`
-- Overall status: `in_progress` (Phase 1)
+- Overall status: `in_progress` (Phase 1, adapter integration completed)
 
 ## Milestones
 
@@ -43,9 +43,9 @@ Tracking against `RUST_REWRITE_PLAN.md`.
   - `packages/sdk/src/lix/open-lix.test.ts`
   - `rfcs/002-rewrite-in-rust/phase-0/m0.3-rollout-modes.md`
 
-### Phase 1 - Adapter Integration (Current)
+### Phase 1 - Adapter Integration
 
-- Status: `in_progress`
+- Status: `completed`
 - Scope:
   - Rust callback adapter wiring behind `rust_active` in SDK bootstrap.
   - Adapter-level serialization/deserialization tests.
@@ -106,16 +106,19 @@ Tracking against `RUST_REWRITE_PLAN.md`.
 - `2026-02-19T18:12:13Z` - Adapter and boot callback tests passed (`9/9`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/boot.test.ts src/engine/rust-rewrite/callback-adapter.test.ts`.
 - `2026-02-19T18:12:24Z` - SDK typecheck passed after adapter wiring: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
 - `2026-02-19T18:12:24Z` - SDK lint passed after adapter wiring: `pnpm --filter @lix-js/sdk lint`.
+- `2026-02-19T18:13:45Z` - Final Phase 1 adapter verification tests passed (`29/29`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/boot.test.ts src/engine/rust-rewrite/callback-adapter.test.ts src/engine/rust-rewrite/callback-contract.test.ts src/lix/open-lix.test.ts`.
+- `2026-02-19T18:14:10Z` - Phase 1 adapter completion event applied via MCP (`evt_20260219_phase1_adapter_complete`).
 
 ## Next Steps
 
 ```md
 <context>
-Phase 0 is complete and verified. The next actionable milestone is Phase 1 adapter integration.
+Phase 1 adapter integration is complete and verified.
 Keep RFC 002 constraints unchanged: SQLite-only initial scope and SDK ownership of SQLite lifecycle.
 </context>
 <task>
-Implement Rust callback adapter wiring behind `rust_active` in SDK bootstrap, then add adapter-level tests for callback serialization/deserialization and deterministic JS-visible error `code` propagation.
+Implement the next Phase 1 milestone (M1.1 parser/router): route read-rewrite and passthrough statements through the rust-active callback surface while preserving current SQL semantics.
+Add focused tests proving parser/router decisions are deterministic and compatible with existing preprocessor expectations.
 Update this progress document continuously as each verified sub-scope completes.
 </task>
 <constraints>
