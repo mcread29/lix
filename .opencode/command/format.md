@@ -1,10 +1,10 @@
 ---
-description: format a prompt from the user input
+description format a prompt from the user input
 ---
 
 <context>
 
-the user is making a request. take the user's words and rewrite them to fit the format. ask questions if necessary
+the user is requesting you to rewrite their prompt in a specific format to be passed to an agent
 
 </context>
 
@@ -19,10 +19,21 @@ $ARGUMENTS
 format the output as follows:
 
 ```md
-context: {information needed for task}
-task: {task to be completed by the agent}
-constraints: {what NOT to do, parameters, musts and nevers}
-format: what the result of the function/script/task should be
+<context>
+{information needed for task}
+</context>
+
+<task>
+{task to be completed by the agent}
+</task>
+
+<constraints>
+{what NOT to do, parameters, musts and nevers}
+</constraints>
+
+<format>
+{what the result of the function/script/task should be}
+</format>
 ```
 
 </task>
