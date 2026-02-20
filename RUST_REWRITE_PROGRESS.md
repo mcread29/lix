@@ -2,7 +2,7 @@
 
 Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
 
-- Last updated: `2026-02-19T18:05:15Z`
+- Last updated: `2026-02-19T18:12:20Z`
 - Phase: `Phase 0`
 - Overall status: `in_progress`
 
@@ -23,11 +23,13 @@ Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
 
 ### M0.2 - Baseline Parity Matrix + Fixture Mapping/Gap Ownership
 
-- Status: `pending`
+- Status: `completed`
 - Planned artifacts:
   - `rfcs/002-rewrite-in-rust/phase-0/m0.2-parity-matrix.md`
 - Verification target:
   - Every baseline scenario mapped to an executable fixture/test; uncovered gaps include owner + due date.
+- Delivered artifacts:
+  - `rfcs/002-rewrite-in-rust/phase-0/m0.2-parity-matrix.md`
 
 ### M0.3 - Feature-Flag Rollout Modes + Verification
 
@@ -57,9 +59,14 @@ Tracking against `RUST_REWRITE_PLAN.md` (Phase 0 only).
 - `2026-02-19T18:04:03Z` - M0.1 callback contract tests passed (`5/5`): `pnpm --filter @lix-js/sdk exec vitest run src/engine/rust-rewrite/callback-contract.test.ts`.
 - `2026-02-19T18:04:14Z` - M0.1 SDK typecheck passed: `pnpm --filter @lix-js/sdk exec tsc --noEmit`.
 - `2026-02-19T18:04:39Z` - M0.1 SDK lint passed: `pnpm --filter @lix-js/sdk lint`.
+- `2026-02-19T18:07:58Z` - M0.2 parity fixture check passed: passthrough statements (`create-preprocessor.test.ts`).
+- `2026-02-19T18:07:59Z` - M0.2 parity fixture check passed: insert rewrite (`entity-views/insert.test.ts`).
+- `2026-02-19T18:07:59Z` - M0.2 parity fixture check passed: update rewrite (`entity-views/update.test.ts`).
+- `2026-02-19T18:07:58Z` - M0.2 parity fixture check passed: delete rewrite (`entity-views/delete.test.ts`).
+- `2026-02-19T18:07:59Z` - M0.2 parity fixture check passed: validation failure (`validate-state-mutation.test.ts`).
 
 ## Next Steps
 
-1. Complete M0.2 by producing the baseline parity matrix for read rewrite, write rewrite, validation failures, and passthrough statements.
-2. Map each matrix scenario to an executable SDK fixture/test and explicitly record owner + due date for any uncovered gap.
-3. Keep scope limited to Phase 0 and retain RFC 002 constraints (SQLite-only, SDK-owned SQLite lifecycle).
+1. Complete M0.3 by adding SDK rollout mode flags for `legacy` and `rust_active`, with `rust_shadow` optional and disabled by default.
+2. Add verification proving `legacy` and `rust_active` initialize correctly when `rust_shadow` is not enabled.
+3. Keep rollout scope constrained to Phase 0 (no default-on migration or later-phase behavior).
