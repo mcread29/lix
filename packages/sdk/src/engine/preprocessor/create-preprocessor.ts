@@ -17,6 +17,7 @@ import { expandSqlViews } from "./steps/expand-sql-views.js";
 import { cachePopulator } from "./steps/cache-populator.js";
 import { rewriteActiveVersionSubquery } from "./steps/rewrite-active-version-subquery.js";
 import { rewriteVtableSelects } from "./steps/rewrite-vtable-selects.js";
+import { rewriteVtableWrites } from "./steps/rewrite-vtable-writes.js";
 import {
 	createCelEnvironment,
 	type CelEnvironment,
@@ -41,6 +42,7 @@ const fullPipeline: PreprocessorStep[] = [
 	rewriteEntityViewInsert,
 	rewriteEntityViewUpdate,
 	rewriteEntityViewDelete,
+	rewriteVtableWrites,
 	rewriteEntityViewSelect,
 	expandSqlViews,
 	cachePopulator,

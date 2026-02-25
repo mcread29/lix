@@ -1,7 +1,6 @@
 import type { Generated } from "kysely";
 import { sql } from "kysely";
 import type { LixEngine } from "../../engine/boot.js";
-import { validateStateMutation } from "./validate-state-mutation.js";
 import { insertTransactionState } from "../transaction/insert-transaction-state.js";
 import {
 	encodeStatePkPart,
@@ -15,8 +14,13 @@ import { internalQueryBuilder } from "../../engine/internal-query-builder.js";
 import { LixStoredSchemaSchema } from "../../stored-schema/schema-definition.js";
 import { withRuntimeCache } from "../../engine/with-runtime-cache.js";
 import { getStateCacheTables } from "../cache/schema.js";
-import { updateFilePathCache } from "../../filesystem/file/cache/update-file-path-cache.js";
-import { composeDirectoryPath } from "../../filesystem/directory/ensure-directories.js";
+import { validateStateWriteMutation } from "./write-helpers/validate-state-write.js";
+import { persistWriter } from "./write-helpers/persist-writer.js";
+import {
+	applyFileDescriptorCacheSideEffects,
+	deleteFilePathCacheEntry,
+} from "./write-helpers/file-cache-side-effects.js";
+import { handleUntrackedDeleteBehavior } from "./write-helpers/delete-behavior.js";
 
 const LIX_OPEN_TRANSACTION = Symbol("lix_open_transaction");
 
@@ -474,7 +478,7 @@ export function applyStateVTable(
 				}
 
 				// Handle array-style results from SQLite exec
-				let value;
+				let value: unknown;
 				if (Array.isArray(row)) {
 					// For array results, composite_key is at index 0, so we use iCol directly
 					value = row[iCol];
@@ -550,10 +554,20 @@ export function applyStateVTable(
 					return capi.SQLITE_OK;
 				}
 
-				if (value === null) {
+				if (value === null || value === undefined) {
 					capi.sqlite3_result_null(pContext);
-				} else {
+				} else if (
+					typeof value === "string" ||
+					typeof value === "number" ||
+					typeof value === "bigint" ||
+					typeof value === "boolean" ||
+					value instanceof Error ||
+					value instanceof Uint8Array ||
+					value instanceof Int8Array
+				) {
 					capi.sqlite3_result_js(pContext, value);
+				} else {
+					capi.sqlite3_result_js(pContext, JSON.stringify(value));
 				}
 
 				return capi.SQLITE_OK;
@@ -588,6 +602,7 @@ export function applyStateVTable(
 							versionId,
 						});
 						persistWriter({
+							engine,
 							fileId,
 							versionId,
 							entityId,
@@ -667,6 +682,7 @@ export function applyStateVTable(
 
 					// Persist writer for INSERT/UPDATE
 					persistWriter({
+						engine,
 						fileId: String(file_id),
 						versionId: String(version_id),
 						entityId: String(entity_id),
@@ -682,7 +698,7 @@ export function applyStateVTable(
 					const schemaKey = String(schema_key);
 					const existingVersionsCache = withVersionCache(engine);
 
-					validateStateMutation({
+					validateStateWriteMutation({
 						engine: engine,
 						schema:
 							schemaKey === LixStoredSchemaSchema["x-lix-key"]
@@ -728,24 +744,12 @@ export function applyStateVTable(
 					});
 
 					if (schemaKey === "lix_file_descriptor") {
-						const descriptorSnapshot =
-							normalizeFileDescriptorSnapshot(parsedSnapshot);
-						if (descriptorSnapshot) {
-							refreshFilePathCacheEntry({
-								engine,
-								fileId: String(entity_id),
-								versionId: String(version_id),
-								directoryId: descriptorSnapshot.directoryId,
-								name: descriptorSnapshot.name,
-								extension: descriptorSnapshot.extension,
-							});
-						} else {
-							deleteFilePathCacheEntry({
-								engine,
-								fileId: String(entity_id),
-								versionId: String(version_id),
-							});
-						}
+						applyFileDescriptorCacheSideEffects({
+							engine,
+							fileId: String(entity_id),
+							versionId: String(version_id),
+							snapshot: parsedSnapshot,
+						});
 					}
 
 					// TODO: This cache copying logic is a temporary workaround for shared commits.
@@ -867,45 +871,7 @@ export function applyStateVTable(
 		false
 	);
 
-	function persistWriter(args: {
-		fileId: string;
-		versionId: string;
-		entityId: string;
-		schemaKey: string;
-		writer: string | null;
-	}): void {
-		if (args.writer && args.writer.length > 0) {
-			// UPSERT writer
-			engine.executeSync(
-				internalQueryBuilder
-					.insertInto("lix_internal_state_writer")
-					.values({
-						file_id: args.fileId,
-						version_id: args.versionId,
-						entity_id: args.entityId,
-						schema_key: args.schemaKey,
-						writer_key: args.writer,
-					})
-					.onConflict((oc) =>
-						oc
-							.columns(["file_id", "version_id", "entity_id", "schema_key"])
-							.doUpdateSet({ writer_key: args.writer as any })
-					)
-					.compile()
-			);
-		} else {
-			// DELETE writer row (no NULL storage)
-			engine.executeSync(
-				internalQueryBuilder
-					.deleteFrom("lix_internal_state_writer")
-					.where("file_id", "=", args.fileId)
-					.where("version_id", "=", args.versionId)
-					.where("entity_id", "=", args.entityId)
-					.where("schema_key", "=", args.schemaKey)
-					.compile()
-			);
-		}
-	}
+
 	function resolveSchemaKey(args: {
 		fileId: string;
 		entityId: string;
@@ -989,67 +955,25 @@ export function handleStateDelete(
 
 	// If entity is untracked, handle differently based on its source (transaction/inherited/direct)
 	if (untracked) {
-		// Parse the primary key tag to determine where the row is coming from in the resolved view
-		const parsed = parseStatePk(primaryKey);
-
-		if (parsed.tag === "UI") {
-			// Inherited untracked: create a tombstone to block inheritance
-			insertTransactionState({
-				engine: engine,
-				timestamp,
-				data: [
-					{
-						entity_id: String(entity_id),
-						schema_key: String(schema_key),
-						file_id: String(file_id),
-						plugin_key: String(plugin_key),
-						snapshot_content: null, // Deletion tombstone
-						schema_version: String(schema_version),
-						version_id: String(version_id),
-						untracked: true,
-					},
-				],
-			});
+		const handled = handleUntrackedDeleteBehavior({
+			engine,
+			timestamp,
+			primaryKey,
+			context: {
+				entity_id: String(entity_id),
+				schema_key: String(schema_key),
+				file_id: String(file_id),
+				plugin_key: String(plugin_key),
+				schema_version: String(schema_version),
+				version_id: String(version_id),
+			},
+		});
+		if (handled) {
 			return;
 		}
-
-		if (parsed.tag === "T" || parsed.tag === "TI") {
-			// The row is coming from the transaction stage (pending untracked insert/update).
-			// Overwrite the pending transaction row with a deletion so the commit drops it
-			// and nothing is persisted to the untracked table.
-			insertTransactionState({
-				engine: engine,
-				timestamp,
-				data: [
-					{
-						entity_id: String(entity_id),
-						schema_key: String(schema_key),
-						file_id: String(file_id),
-						plugin_key: String(plugin_key),
-						snapshot_content: null, // mark as delete in txn
-						schema_version: String(schema_version),
-						version_id: String(version_id),
-						untracked: true,
-					},
-				],
-			});
-			return;
-		}
-
-		// Direct untracked in this version (U tag) – delete from the untracked table immediately
-		engine.executeSync(
-			internalQueryBuilder
-				.deleteFrom("lix_internal_state_all_untracked")
-				.where("entity_id", "=", String(entity_id))
-				.where("schema_key", "=", String(schema_key))
-				.where("file_id", "=", String(file_id))
-				.where("version_id", "=", String(version_id))
-				.compile()
-		);
-		return;
 	}
 
-	validateStateMutation({
+	validateStateWriteMutation({
 		engine: engine,
 		schema:
 			String(schema_key) === LixStoredSchemaSchema["x-lix-key"]
@@ -1080,119 +1004,6 @@ export function handleStateDelete(
 			},
 		],
 	});
-}
-
-function deleteFilePathCacheEntry(args: {
-	engine: Pick<LixEngine, "sqlite">;
-	fileId: string;
-	versionId: string;
-}): void {
-	args.engine.sqlite.exec({
-		sql: `
-			DELETE FROM lix_internal_file_path_cache
-			WHERE file_id = ?
-			  AND version_id = ?
-		`,
-		bind: [args.fileId, args.versionId],
-		returnValue: "resultRows",
-	});
-}
-
-function refreshFilePathCacheEntry(args: {
-	engine: Pick<LixEngine, "sqlite" | "executeSync">;
-	fileId: string;
-	versionId: string;
-	directoryId: string | null;
-	name: string;
-	extension: string | null;
-}): void {
-	const resolvedPath = resolveFileDescriptorPath({
-		engine: args.engine,
-		versionId: args.versionId,
-		directoryId: args.directoryId,
-		name: args.name,
-		extension: args.extension,
-	});
-
-	if (!resolvedPath) {
-		deleteFilePathCacheEntry({
-			engine: args.engine,
-			fileId: args.fileId,
-			versionId: args.versionId,
-		});
-		return;
-	}
-
-	updateFilePathCache({
-		engine: args.engine,
-		fileId: args.fileId,
-		versionId: args.versionId,
-		directoryId: args.directoryId,
-		name: args.name,
-		extension: args.extension,
-		path: resolvedPath,
-	});
-}
-
-type NormalizedDescriptorSnapshot = {
-	directoryId: string | null;
-	name: string;
-	extension: string | null;
-};
-
-function normalizeFileDescriptorSnapshot(
-	snapshot: any
-): NormalizedDescriptorSnapshot | null {
-	if (!snapshot || typeof snapshot !== "object") {
-		return null;
-	}
-	const directoryIdRaw = (snapshot as any).directory_id;
-	const nameRaw = (snapshot as any).name;
-	const extensionRaw = (snapshot as any).extension;
-	if (typeof nameRaw !== "string" || nameRaw.length === 0) {
-		return null;
-	}
-	const directoryId =
-		typeof directoryIdRaw === "string" && directoryIdRaw.length > 0
-			? directoryIdRaw
-			: null;
-	const extension =
-		typeof extensionRaw === "string" && extensionRaw.length > 0
-			? extensionRaw
-			: null;
-	return {
-		directoryId,
-		name: nameRaw,
-		extension,
-	};
-}
-
-function resolveFileDescriptorPath(args: {
-	engine: Pick<LixEngine, "executeSync">;
-	versionId: string;
-	directoryId: string | null;
-	name: string;
-	extension: string | null;
-}): string | null {
-	const directoryPath = args.directoryId
-		? (composeDirectoryPath({
-				engine: args.engine,
-				versionId: args.versionId,
-				directoryId: args.directoryId,
-			}) ?? undefined)
-		: "/";
-
-	if (!directoryPath) {
-		return null;
-	}
-
-	const normalizedExtension =
-		args.extension && args.extension.length > 0 ? args.extension : null;
-	const suffix = normalizedExtension
-		? `${args.name}.${normalizedExtension}`
-		: args.name;
-	const basePath = directoryPath === "/" ? "/" : directoryPath;
-	return `${basePath}${suffix}`;
 }
 
 function getColumnName(columnIndex: number): string {

@@ -273,3 +273,176 @@ test("state file_id predicate is pushed into vtable rewrite for markdown schemas
 
 	await lix.close();
 });
+
+test("insert into state_by_version rewrites to physical path and preserves visibility", async () => {
+	const lix = await openLix({});
+	const preprocess = createPreprocessor({ engine: lix.engine! });
+	const activeVersion = await lix.db
+		.selectFrom("active_version")
+		.select("version_id")
+		.executeTakeFirstOrThrow();
+
+	const trackedInsert = preprocess({
+		sql: `
+			INSERT INTO state_by_version (
+				entity_id,
+				schema_key,
+				file_id,
+				version_id,
+				plugin_key,
+				snapshot_content,
+				schema_version,
+				untracked
+			) VALUES (
+				'kv-tracked',
+				'lix_version_tip',
+				'lix',
+				'${activeVersion.version_id}',
+				'lix_sdk',
+				'{"id":"kv-tracked","commit_id":"c1","working_commit_id":"c1"}',
+				'1.0',
+				0
+			)
+		`,
+		parameters: [],
+	});
+	const untrackedInsert = preprocess({
+		sql: `
+			INSERT INTO state_by_version (
+				entity_id,
+				schema_key,
+				file_id,
+				version_id,
+				plugin_key,
+				snapshot_content,
+				schema_version,
+				untracked
+			) VALUES (
+				'kv-untracked',
+				'lix_version_tip',
+				'lix',
+				'${activeVersion.version_id}',
+				'lix_sdk',
+				'{"id":"kv-untracked","commit_id":"c1","working_commit_id":"c1"}',
+				'1.0',
+				1
+			)
+		`,
+		parameters: [],
+	});
+
+	expect(trackedInsert.sql).toContain("INSERT INTO lix_internal_transaction_state");
+	expect(untrackedInsert.sql).toContain(
+		"INSERT INTO lix_internal_transaction_state"
+	);
+
+	lix.engine!.sqlite.exec({
+		sql: trackedInsert.sql,
+		returnValue: "resultRows",
+	});
+	lix.engine!.sqlite.exec({
+		sql: untrackedInsert.sql,
+		returnValue: "resultRows",
+	});
+
+	const rows = await lix.db
+		.selectFrom("state_by_version")
+		.select(["entity_id", "untracked"])
+		.where("schema_key", "=", "lix_version_tip")
+		.where("version_id", "=", activeVersion.version_id)
+		.where("entity_id", "in", ["kv-tracked", "kv-untracked"])
+		.execute();
+
+	expect(rows).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({ entity_id: "kv-tracked", untracked: 0 }),
+			expect.objectContaining({ entity_id: "kv-untracked", untracked: 1 }),
+		])
+	);
+
+	await lix.close();
+});
+
+test("insert into state rewrites to physical path and preserves visibility", async () => {
+	const lix = await openLix({});
+	const preprocess = createPreprocessor({ engine: lix.engine! });
+	const activeVersion = await lix.db
+		.selectFrom("active_version")
+		.select("version_id")
+		.executeTakeFirstOrThrow();
+
+	const trackedInsert = preprocess({
+		sql: `
+			INSERT INTO state (
+				entity_id,
+				schema_key,
+				file_id,
+				plugin_key,
+				snapshot_content,
+				schema_version,
+				untracked
+			) VALUES (
+				'state-tracked',
+				'lix_version_tip',
+				'lix',
+				'lix_sdk',
+				'{"id":"state-tracked","commit_id":"c1","working_commit_id":"c1"}',
+				'1.0',
+				0
+			)
+		`,
+		parameters: [],
+	});
+	const untrackedInsert = preprocess({
+		sql: `
+			INSERT INTO state (
+				entity_id,
+				schema_key,
+				file_id,
+				plugin_key,
+				snapshot_content,
+				schema_version,
+				untracked
+			) VALUES (
+				'state-untracked',
+				'lix_version_tip',
+				'lix',
+				'lix_sdk',
+				'{"id":"state-untracked","commit_id":"c1","working_commit_id":"c1"}',
+				'1.0',
+				1
+			)
+		`,
+		parameters: [],
+	});
+
+	expect(trackedInsert.sql).toContain("INSERT INTO lix_internal_transaction_state");
+	expect(untrackedInsert.sql).toContain(
+		"INSERT INTO lix_internal_transaction_state"
+	);
+
+	lix.engine!.sqlite.exec({
+		sql: trackedInsert.sql,
+		returnValue: "resultRows",
+	});
+	lix.engine!.sqlite.exec({
+		sql: untrackedInsert.sql,
+		returnValue: "resultRows",
+	});
+
+	const rows = await lix.db
+		.selectFrom("state")
+		.select(["entity_id", "untracked"])
+		.where("schema_key", "=", "lix_version_tip")
+		.where("entity_id", "in", ["state-tracked", "state-untracked"])
+		.execute();
+
+	expect(rows).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({ entity_id: "state-tracked", untracked: 0 }),
+			expect.objectContaining({ entity_id: "state-untracked", untracked: 1 }),
+		])
+	);
+
+	await lix.close();
+});

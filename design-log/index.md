@@ -6,6 +6,7 @@ Quick index for design logs in `design-log/`.
 | --- | --- | --- | --- | --- |
 | [#0001](./0001-state-of-lix.md) | Current State of Lix | Draft baseline | 2026-02-25 | Initial architecture and package snapshot |
 | [#0002](./0002-preprocess-writes.md) | Preprocess Writes for state/state_by_version/vtable | Proposed | 2026-02-25 | Non-breaking write rewrite plan and exact affected SDK files |
+| [#0003](./0003-transaction-table-removal-cutover.md) | Transaction Table Removal Cutover (Tasks 13-23) | Proposed | 2026-02-25 | Staged plan to safely complete cancelled RFC 001 migration tasks |
 
 ## Conventions
 
