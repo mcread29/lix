@@ -1,0 +1,170 @@
+[
+  {
+    "context": "Design Log #0002 is approved as the implementation contract for RFC 001. Current preprocessor pipeline lives in packages/sdk/src/engine/preprocessor/create-preprocessor.ts.",
+    "task": "Add a no-op rewrite step file at packages/sdk/src/engine/preprocessor/steps/rewrite-vtable-writes.ts exporting `rewriteVtableWrites: PreprocessorStep` that returns input statements unchanged.",
+    "constraints": "Do not change runtime behavior yet. Do not touch existing rewrite steps. Keep export style and TypeScript conventions used by nearby step files.",
+    "output": "New compileable step file with typed export and zero behavior change.",
+    "status": "not started"
+  },
+  {
+    "context": "The full pipeline in create-preprocessor.ts currently runs entity-view rewrites, expand views, cache, active-version rewrite, and vtable select rewrite.",
+    "task": "Wire `rewriteVtableWrites` into `fullPipeline` immediately after entity-view DML rewrites and before select-only rewrite stages.",
+    "constraints": "Do not add it to vtable-select-only mode. Do not reorder existing read steps beyond this insertion.",
+    "output": "Preprocessor full mode invokes the new write step in the intended position.",
+    "status": "not started"
+  },
+  {
+    "context": "Preprocessor step behavior must be testable in isolation before adding rewrite logic.",
+    "task": "Add rewrite-vtable-writes.test.ts to assert: non-target SQL stays unchanged, parse/compile roundtrip remains valid, and trace entry behavior is deterministic.",
+    "constraints": "Do not assert implementation details not yet introduced. Avoid fragile SQL whitespace expectations.",
+    "output": "Green baseline tests proving the scaffolded step is safe and stable.",
+    "status": "not started"
+  },
+  {
+    "context": "Write targets for RFC are state/state_by_version/lix_internal_state_vtable DML statements.",
+    "task": "Implement target-table detection helpers in rewrite-vtable-writes.ts for INSERT/UPDATE/DELETE statements aimed at `state`, `state_by_version`, or `lix_internal_state_vtable`.",
+    "constraints": "Do not rewrite unsupported statements. Do not inspect raw SQL text; rely on AST nodes.",
+    "output": "Deterministic table-target detection helper functions with unit tests.",
+    "status": "not started"
+  },
+  {
+    "context": "`state` writes need active version resolution; context already exposes `getActiveVersionId`.",
+    "task": "Add helper that resolves `state` write statements to concrete `version_id` using `getActiveVersionId` and aborts rewrite when active version is unavailable.",
+    "constraints": "Do not guess version_id. Do not change behavior for `state_by_version` or direct vtable targets.",
+    "output": "Reusable version-resolution helper with explicit fallback behavior.",
+    "status": "not started"
+  },
+  {
+    "context": "First rewrite scope includes INSERT VALUES and INSERT DEFAULT VALUES only.",
+    "task": "Implement AST extractor for INSERT payload rows and columns for supported forms, producing normalized mutation rows for downstream rewrite logic.",
+    "constraints": "Do not implement INSERT...SELECT yet. If shape is unsupported, return fallback decision without rewriting.",
+    "output": "Typed row-extraction utility plus tests for supported and unsupported INSERT shapes.",
+    "status": "not started"
+  },
+  {
+    "context": "Validation parity requires reusing existing mutation validator logic.",
+    "task": "Extract reusable validation entrypoint(s) from state/vtable/validate-state-mutation.ts so both vtable path and preprocessor write path can invoke identical checks.",
+    "constraints": "Do not duplicate validation logic. Do not weaken existing constraints or error semantics.",
+    "output": "Shared validation helper API consumed by old and new paths with parity tests.",
+    "status": "not started"
+  },
+  {
+    "context": "vtable.ts currently persists writer metadata and applies file descriptor cache side effects.",
+    "task": "Extract writer persistence logic from vtable.ts into `packages/sdk/src/state/vtable/write-helpers/persist-writer.ts` and update vtable.ts to call it.",
+    "constraints": "No behavior change allowed. Preserve SQL statements and conflict behavior.",
+    "output": "Shared writer helper in dedicated file, with vtable.ts refactored to consume it.",
+    "status": "not started"
+  },
+  {
+    "context": "File descriptor writes/deletes currently update `lix_internal_file_path_cache` inside vtable write flow.",
+    "task": "Extract file cache side effects into `packages/sdk/src/state/vtable/write-helpers/file-cache-side-effects.ts` and reuse in vtable.ts.",
+    "constraints": "Do not alter cache key/path semantics. Do not skip delete-path behavior.",
+    "output": "Single helper for file path cache insert/update/delete side effects with parity tests.",
+    "status": "not started"
+  },
+  {
+    "context": "Delete behavior is source-tag aware (tracked/untracked/inherited) and currently embedded in vtable.ts.",
+    "task": "Extract delete-behavior logic into `packages/sdk/src/state/vtable/write-helpers/delete-behavior.ts` with explicit source-tag handling contracts.",
+    "constraints": "Do not flatten source-tag rules. Preserve tombstone vs direct-untracked-delete semantics.",
+    "output": "Reusable delete helper plus targeted tests for T/TI/U/UI source branches.",
+    "status": "not started"
+  },
+  {
+    "context": "INSERT rewrites should bypass vtable and produce physical writes directly.",
+    "task": "Implement INSERT rewrite in rewrite-vtable-writes.ts to generate physical SQL statements that perform validated writes without invoking vtable callbacks.",
+    "constraints": "Only rewrite supported INSERT shapes. Keep fallback strategy for unsupported forms. Preserve parameter ordering and binding semantics.",
+    "output": "INSERT statements targeting supported tables are rewritten to physical-write SQL and pass integration tests.",
+    "status": "not started"
+  },
+  {
+    "context": "`state` and `state_by_version` are currently trigger-backed views into the vtable.",
+    "task": "Add integration tests showing INSERT into `state` and `state_by_version` reaches rewritten physical path and yields equivalent visible results to prior behavior.",
+    "constraints": "Use real Lix database, no mocks. Cover both tracked and untracked writes.",
+    "output": "Green integration tests proving INSERT parity on public SQL surfaces.",
+    "status": "not started"
+  },
+  {
+    "context": "UPDATE rewrite is in scope for first implementation phase.",
+    "task": "Implement UPDATE rewrite for supported predicates into equivalent physical-write operations with validation and writer/file side effects.",
+    "constraints": "Do not support ambiguous UPDATE forms without proven parity. Fallback when not safely rewritable.",
+    "output": "Supported UPDATE statements bypass vtable and preserve behavior.",
+    "status": "not started"
+  },
+  {
+    "context": "DELETE rewrite requires source-aware semantics from extracted delete helper.",
+    "task": "Implement DELETE rewrite for supported predicates, invoking shared delete behavior to preserve tracked/untracked/inherited outcomes.",
+    "constraints": "Do not collapse delete flows into one generic branch. Preserve existing tombstone semantics.",
+    "output": "Supported DELETE statements bypass vtable with parity-verified behavior.",
+    "status": "not started"
+  },
+  {
+    "context": "RFC requests removing transaction-state staging architecture; this affects schema and typed DB contracts.",
+    "task": "Remove `lix_internal_transaction_state` from runtime schema creation in packages/sdk/src/state/transaction/schema.ts and from internal schema typing in packages/sdk/src/database/schema.ts.",
+    "constraints": "Do not remove unrelated internal tables. Update dependent types/queries in same change set so build remains green.",
+    "output": "Transaction table no longer exists in schema bootstrap or type contracts.",
+    "status": "not started"
+  },
+  {
+    "context": "State transaction insertion helper becomes obsolete once transaction table is removed.",
+    "task": "Delete or replace `packages/sdk/src/state/transaction/insert-transaction-state.ts` with the new physical-write target helper API used by rewrite-vtable-writes and any remaining runtime callers.",
+    "constraints": "Do not leave dead imports. Do not keep dual write paths that can diverge.",
+    "output": "No remaining production caller depends on obsolete insert-transaction-state behavior.",
+    "status": "not started"
+  },
+  {
+    "context": "vtable runtime currently owns xUpdate/xRollback/open-transaction logic tied to transaction table.",
+    "task": "Refactor packages/sdk/src/state/vtable/vtable.ts to remove transaction-table dependent write lifecycle logic while retaining required read/vtable compatibility behavior.",
+    "constraints": "Do not break read paths unintentionally. Keep module registration stable unless explicitly migrated.",
+    "output": "vtable runtime no longer acts as primary write executor and no longer depends on removed transaction table.",
+    "status": "not started"
+  },
+  {
+    "context": "commit.ts currently materializes pending rows from transaction table.",
+    "task": "Redesign packages/sdk/src/state/vtable/commit.ts to source commit materialization from the new write architecture and preserve existing hook and cache update outcomes.",
+    "constraints": "Do not change external commit API shape. Preserve state_commit hook semantics.",
+    "output": "Commit flow works without transaction table and passes commit-related tests.",
+    "status": "not started"
+  },
+  {
+    "context": "rewrite-vtable-selects currently builds candidate segments including transaction-state sources.",
+    "task": "Update packages/sdk/src/engine/preprocessor/steps/rewrite-vtable-selects.ts to remove transaction-source segment planning and adapt ranking logic to remaining sources.",
+    "constraints": "Do not regress query correctness for current read scenarios. Keep conservative fallback rules intact.",
+    "output": "Read rewrite no longer references transaction table and remains behavior-correct.",
+    "status": "not started"
+  },
+  {
+    "context": "change view currently unions transaction-state rows.",
+    "task": "Update packages/sdk/src/change/schema.ts to remove transaction-state union branch and ensure `change` view semantics still match post-migration write model.",
+    "constraints": "Do not alter `change_insert` trigger behavior unless required by new architecture.",
+    "output": "Change view definition compiles and reflects new source-of-truth tables only.",
+    "status": "not started"
+  },
+  {
+    "context": "merge-version currently reads and deletes rows from transaction table during merge flow.",
+    "task": "Refactor packages/sdk/src/version/merge-version.ts to remove transaction-table reads/deletes and use new post-rewrite sources for pending/reference changes.",
+    "constraints": "Do not change merge public API. Preserve one-commit merge model behavior.",
+    "output": "merge-version works without transaction table dependency.",
+    "status": "not started"
+  },
+  {
+    "context": "After architecture migration, test suite contains obsolete transaction-table assumptions.",
+    "task": "Update or remove transaction-table specific tests and add parity tests for rewrite-vtable-writes across INSERT/UPDATE/DELETE on state, state_by_version, and direct vtable SQL.",
+    "constraints": "No mocks for Lix internals. Keep tests behavior-focused with Arrange/Act/Assert.",
+    "output": "Comprehensive tests validate new write path and remove stale transaction-table assertions.",
+    "status": "not started"
+  },
+  {
+    "context": "Benchmarks must demonstrate RFC performance goals and guard regressions.",
+    "task": "Update relevant benchmarks (vtable.insert, commit, validation, and rewrite select benchmarks as needed) to reflect new architecture and capture before/after metrics.",
+    "constraints": "Do not hand-wave benchmark claims. Keep benchmark setup comparable and reproducible.",
+    "output": "Benchmark outputs quantify migration impact and validate target direction for bulk writes.",
+    "status": "not started"
+  },
+  {
+    "context": "Design-log process requires implementation result tracking and deviation notes.",
+    "task": "Append `Implementation Results` section to design-log/0002-preprocess-writes.md documenting completed phases, test/lint/typecheck outcomes, and any deviations from the original plan.",
+    "constraints": "Do not rewrite initial sections retroactively. Keep deviations explicit and justified.",
+    "output": "Design Log #0002 includes an auditable implementation record.",
+    "status": "not started"
+  }
+]
